@@ -1,20 +1,23 @@
 {
   "name": "luna-clean",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "check:version": "node scripts/check-version.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "check": "npm run build && cargo check --manifest-path src-tauri/Cargo.toml"
+    "check": "npm run check:version && npm run build && cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@fluentui/react-icons": "^2.0.320",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "recharts": "^3.9.2"

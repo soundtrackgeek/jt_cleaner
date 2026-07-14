@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   ArrowRight24Regular,
+  ArrowDownload24Regular,
   ArrowSync24Regular,
   CalendarClock24Regular,
   CheckmarkCircle24Regular,
@@ -235,7 +236,7 @@ export function ScheduleView({ schedule, roots, selectedRoot, onScheduleChange, 
   );
 }
 
-export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder, startupEnabled, startupBusy, onStartupToggle, aiStatus, onSaveApiKey, onRemoveApiKey }) {
+export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder, startupEnabled, startupBusy, onStartupToggle, aiStatus, onSaveApiKey, onRemoveApiKey, updateState, onCheckForUpdates, onInstallUpdate }) {
   const [diagnostics, setDiagnostics] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [credentialBusy, setCredentialBusy] = useState(false);
@@ -246,6 +247,7 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
     : aiStatus?.source === "environment"
       ? "Using OPENAI_API_KEY from the development environment"
       : "No key configured";
+  const updateBusy = ["checking", "downloading", "installing", "restarting"].includes(updateState?.phase);
 
   async function submitApiKey(event) {
     event.preventDefault();
@@ -286,6 +288,21 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
         <div className="setting-row"><span className="setting-icon"><Folder24Regular /></span><div><strong>Custom folder</strong><small>Choose any accessible folder for a one-time scan.</small></div><button className="secondary-button" type="button" onClick={onChooseFolder}>Choose</button></div>
         <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Start with Windows</strong><small>Start hidden in the tray; the full window stays unloaded until you open it.</small></div><button className={`switch ${startupEnabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={startupEnabled} disabled={startupBusy} onClick={onStartupToggle}><i /></button></div>
         <div className="setting-row"><span className="setting-icon"><Settings24Regular /></span><div><strong>Share anonymous diagnostics</strong><small>Off by default. No file names or paths.</small></div><button className={`switch ${diagnostics ? "is-on" : ""}`} type="button" role="switch" aria-checked={diagnostics} onClick={() => setDiagnostics(!diagnostics)}><i /></button></div>
+      </section>
+      <section className="feature-surface update-card">
+        <div className="update-heading">
+          <span className={`update-state ${updateState?.phase === "available" ? "has-update" : ""}`}><ArrowDownload24Regular /></span>
+          <div>
+            <h2>Windows updates</h2>
+            <p>{updateState?.message || `Version ${updateState?.currentVersion || "0.6.0"} · signed release channel`}</p>
+          </div>
+          <div className="update-actions">
+            <button className="secondary-button" type="button" disabled={updateBusy} onClick={onCheckForUpdates}>{updateState?.phase === "checking" ? "Checking…" : "Check now"}</button>
+            {updateState?.phase === "available" && <button className="primary-button" type="button" onClick={onInstallUpdate}>Install {updateState.availableVersion}</button>}
+          </div>
+        </div>
+        {["downloading", "installing", "restarting"].includes(updateState?.phase) && <div className="update-progress" aria-label={`Update progress ${updateState.progress || 0}%`}><i style={{ width: `${updateState.progress || 4}%` }} /></div>}
+        <small>Every installer and update manifest must match Luna's embedded signing key before installation can begin.</small>
       </section>
       <section className="feature-surface credential-card">
         <div className="credential-heading">

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
@@ -381,7 +381,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.5.0");
+  const [appVersion, setAppVersion] = useState("0.6.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -395,6 +395,8 @@ export function App() {
   const [aiStatus, setAiStatus] = useState({ configured: false, model: "gpt-5.6-luna", source: "none" });
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.6.0", availableVersion: "", progress: 0, message: "" });
+  const updateRef = useRef(null);
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
   const selectedSize = useMemo(
@@ -421,8 +423,15 @@ export function App() {
         setScheduleStatus(schedule);
         setStartupEnabled(autostart);
         setAiStatus(ai);
+        setUpdateState((current) => ({ ...current, currentVersion: status.version }));
       })
       .catch(() => undefined);
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return undefined;
+    const timer = window.setTimeout(() => checkForUpdates(true), 1200);
+    return () => window.clearTimeout(timer);
   }, [isTauri]);
 
   useEffect(() => {
@@ -599,6 +608,65 @@ export function App() {
     return updated;
   }
 
+  async function checkForUpdates(silent = false) {
+    if (!isTauri) {
+      setUpdateState((current) => ({ ...current, phase: "current", message: "Update checks run in the installed Windows app." }));
+      return;
+    }
+    setUpdateState((current) => ({ ...current, phase: "checking", progress: 0, message: "Checking the signed release channel…" }));
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      updateRef.current = update;
+      if (update) {
+        setUpdateState((current) => ({
+          ...current,
+          phase: "available",
+          availableVersion: update.version,
+          message: `Luna Clean ${update.version} is ready to install.`,
+        }));
+        if (!silent) setToast(`Luna Clean ${update.version} is available.`);
+      } else {
+        setUpdateState((current) => ({ ...current, phase: "current", availableVersion: "", message: "You have the newest signed release." }));
+        if (!silent) setToast("Luna Clean is up to date.");
+      }
+    } catch (error) {
+      updateRef.current = null;
+      setUpdateState((current) => ({ ...current, phase: "error", message: String(error) }));
+      if (!silent) setToast(`Update check stopped: ${String(error)}`);
+    }
+  }
+
+  async function installUpdate() {
+    const update = updateRef.current;
+    if (!update) {
+      await checkForUpdates();
+      return;
+    }
+    let downloaded = 0;
+    let contentLength = 0;
+    setUpdateState((current) => ({ ...current, phase: "downloading", progress: 0, message: "Downloading the signed installer…" }));
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          contentLength = event.data.contentLength || 0;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          const progress = contentLength ? Math.min(Math.round((downloaded / contentLength) * 100), 99) : 0;
+          setUpdateState((current) => ({ ...current, phase: "downloading", progress, message: progress ? `Downloading update · ${progress}%` : "Downloading the signed installer…" }));
+        } else if (event.event === "Finished") {
+          setUpdateState((current) => ({ ...current, phase: "installing", progress: 100, message: "Installing securely…" }));
+        }
+      });
+      setUpdateState((current) => ({ ...current, phase: "restarting", progress: 100, message: "Restarting into the new version…" }));
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (error) {
+      setUpdateState((current) => ({ ...current, phase: "error", message: String(error) }));
+      setToast(`Update installation stopped: ${String(error)}`);
+    }
+  }
+
   async function completeCleanup() {
     const count = selectedItems.length;
     const size = selectedSize;
@@ -703,6 +771,9 @@ export function App() {
         aiStatus={aiStatus}
         onSaveApiKey={saveApiKey}
         onRemoveApiKey={removeApiKey}
+        updateState={updateState}
+        onCheckForUpdates={() => checkForUpdates(false)}
+        onInstallUpdate={installUpdate}
       />
     ),
   };

@@ -933,6 +933,80 @@ input:focus-visible {
   gap: 16px;
 }
 
+.update-card {
+  padding: 18px;
+  display: grid;
+  gap: 13px;
+}
+
+.update-heading {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.update-heading h2,
+.update-heading p {
+  margin: 0;
+}
+
+.update-heading h2 {
+  color: #e8ebf2;
+  font-size: 13px;
+}
+
+.update-heading p {
+  margin-top: 4px;
+  color: var(--quiet);
+  font-size: 9px;
+}
+
+.update-state {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--mint-soft);
+  color: var(--mint);
+}
+
+.update-state.has-update {
+  background: var(--violet-soft);
+  color: #a39bff;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.update-actions button {
+  min-height: 34px;
+}
+
+.update-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #242e3d;
+}
+
+.update-progress i {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6f63ee, #9a91ff);
+  transition: width 160ms ease;
+}
+
+.update-card > small {
+  color: var(--quiet);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .credential-heading {
   display: flex;
   align-items: center;

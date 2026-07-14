@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0] - 2026-07-14
+
+### Added
+
+- Signed in-app update checks, download progress, passive Windows installation, and app relaunch from Settings.
+- Automatic update checks when the full window opens; the tray-only background process performs no update polling.
+- GitHub Actions quality checks for frontend builds, Rust formatting, native tests, and synchronized release versions.
+- Automatic signed NSIS builds, updater signatures, `latest.json`, version tags, and GitHub Releases on every push to `master`.
+- A release-version guard that keeps `package.json`, Cargo, Tauri configuration, and the dated changelog heading synchronized.
+
+### Changed
+
+- Tauri bundles now emit signed updater artifacts alongside the NSIS installer.
+- Windows updates use passive installer mode and require Luna's embedded public key before installation.
+- Dynamic imports keep updater code out of the main frontend chunk until an update check is needed.
+
 ## [0.5.0] - 2026-07-14
 
 ### Added

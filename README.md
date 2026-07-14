@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.5.0` adds GPT-5.6-Luna storage investigations and secure in-app OpenAI key setup. Keys entered in Settings are validated by the Rust backend and saved for the current Windows user in Credential Manager, never frontend storage or Luna's JSON files.
+Version `0.6.0` adds signed Windows updates and a GitHub Actions release pipeline. Every push to `master` is tested, built as a signed NSIS installer, published as a versioned GitHub Release, and exposed through the app's signed update channel.
 
 ### Included
 
@@ -28,6 +28,9 @@ Version `0.5.0` adds GPT-5.6-Luna storage investigations and secure in-app OpenA
 - Strict structured AI responses with evidence, confidence, risk, and review-safe next actions.
 - Masked in-app OpenAI key setup with Rust-side validation and Windows Credential Manager storage.
 - Development fallback through `OPENAI_API_KEY`, with the saved Windows credential taking priority.
+- Automatic update checks when the full interface opens, plus manual **Check now** in Settings.
+- Signed in-app update download, progress, passive installation, and restart.
+- GitHub Actions quality checks and automatic versioned Windows Releases on pushes to `master`.
 - Native Tauri 2 shell and NSIS bundle configuration.
 
 ## Prerequisites
@@ -65,6 +68,14 @@ Open **Schedule** to enable a daily, weekly, or monthly aggregate snapshot and c
 
 Open **Settings** to enable **Start with Windows**. Luna then starts hidden in the tray, checks whether a snapshot is due, and keeps the full WebView unloaded until you open the app. Closing the main window returns to that lightweight tray-only state; use **Quit Luna Clean** from the tray to exit completely.
 
+## Updates and releases
+
+Luna checks the GitHub release channel only when the full window opens, preserving the low-memory and low-network tray state. Open **Settings → Windows updates** to check manually. If a newer semantic version exists, Luna downloads the NSIS package, verifies its updater signature against the public key embedded in the app, installs it in passive mode, and relaunches. Installation always requires an explicit button press.
+
+Every push to `master` runs `.github/workflows/release.yml`. The workflow checks synchronized versions, builds the frontend, checks Rust formatting, runs native tests, then creates a signed NSIS installer, updater signature, `latest.json`, `vMAJOR.MINOR.PATCH` tag, and GitHub Release. Before pushing release code, update the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, then add the matching dated heading to `CHANGELOG.md`; `npm run check:version` enforces this.
+
+The updater private key and its password are stored as `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` GitHub Actions secrets and are never committed. The development machine's backup is outside the repository at `%USERPROFILE%\.tauri\luna-clean.key` with its separate password file; keep a secure offline backup of both because future builds must use the same key to update existing installations.
+
 Large drive scans may encounter protected Windows folders. Luna skips unreadable entries, reports bounded warnings, does not follow symbolic links, and excludes common high-churn developer folders such as `.git` and `node_modules`. Duplicate analysis is capped at 20,000 files of at least 1 MB so large scans remain bounded; storage totals are not capped.
 
 ## Commands
@@ -72,6 +83,7 @@ Large drive scans may encounter protected Windows folders. Luna skips unreadable
 ```powershell
 npm run dev          # Browser-based UI development
 npm run build        # Build the frontend
+npm run check:version # Verify synchronized release metadata
 npm run check        # Build the frontend and check the Rust crate
 npm run tauri dev    # Run the native desktop app
 npm run tauri build  # Build the Windows NSIS installer
@@ -83,5 +95,5 @@ Luna Clean distinguishes rebuildable caches from personal data, defaults review-
 
 ## Planned next stages
 
-- Signed Windows updates installed from inside Luna Clean.
-- GitHub Actions quality checks and automatic versioned GitHub Releases.
+- Deeper scanner performance profiling across very large NTFS volumes.
+- Optional user-defined safe cleanup locations with conservative path validation.

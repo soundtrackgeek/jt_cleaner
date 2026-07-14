@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.6.3` keeps completed Windows scans connected to their trend snapshots even when Windows returns an extended canonical path. Starting a snapshot from Trends now stays on that page and shows live capture feedback until the scan finishes.
+Version `0.7.0` remembers the main window's last position, size, and maximized state. The same geometry is restored after reopening from the tray, restarting Luna, or relaunching into an installed update, while unavailable monitor layouts fall back to Windows placement.
 
 ### Included
 
@@ -26,6 +26,7 @@ Version `0.6.3` keeps completed Windows scans connected to their trend snapshots
 - Daily, weekly, or monthly background snapshot scheduling with weekly as the default.
 - A single-scan guard shared by foreground and scheduled scans.
 - Close-to-tray behavior that destroys the WebView instead of keeping the full interface hidden in memory.
+- Persistent main-window position, size, and maximized state across tray reopen, app restart, and update relaunch.
 - GPT-5.6-Luna investigation reports and follow-up questions using minimized aggregate scan metadata.
 - Strict structured AI responses with evidence, confidence, risk, and review-safe next actions.
 - Masked in-app OpenAI key setup with Rust-side validation and Windows Credential Manager storage.

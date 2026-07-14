@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0] - 2026-07-14
+
+### Added
+
+- Remember and restore the main window's position, size, and maximized state when reopening from the tray, restarting the app, or relaunching after an update.
+- Ignore a saved position when its window rectangle no longer intersects an available monitor, allowing Windows to place the window safely after a display-layout change.
+
 ## [0.6.3] - 2026-07-14
 
 ### Fixed

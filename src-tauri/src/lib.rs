@@ -15,6 +15,7 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
 };
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[derive(Default)]
 struct RuntimeState {
@@ -165,6 +166,10 @@ fn acquire_scan(flag: Arc<AtomicBool>) -> Result<ScanPermit, String> {
 
 fn should_prevent_exit(quitting: bool, code: Option<i32>) -> bool {
     !quitting && code != Some(tauri::RESTART_EXIT_CODE)
+}
+
+fn remembered_window_state() -> StateFlags {
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
 }
 
 fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -347,6 +352,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(remembered_window_state())
+                .build(),
+        )
         .setup(|app| {
             setup_tray(app)?;
             let flag = app.state::<RuntimeState>().scan_running.clone();
@@ -359,6 +369,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                let _ = window
+                    .app_handle()
+                    .save_window_state(remembered_window_state());
                 let _ = window.destroy();
             }
         })
@@ -400,5 +413,14 @@ mod tests {
         assert!(should_prevent_exit(false, None));
         assert!(!should_prevent_exit(true, None));
         assert!(!should_prevent_exit(false, Some(tauri::RESTART_EXIT_CODE)));
+    }
+
+    #[test]
+    fn window_state_tracks_geometry_without_restoring_visibility() {
+        let flags = remembered_window_state();
+        assert!(flags.contains(StateFlags::SIZE));
+        assert!(flags.contains(StateFlags::POSITION));
+        assert!(flags.contains(StateFlags::MAXIMIZED));
+        assert!(!flags.contains(StateFlags::VISIBLE));
     }
 }

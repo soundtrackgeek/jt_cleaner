@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.12.0` adds careful file-level actions to Duplicates and Large files. You can select exact copies or large files for confirmed deletion, and ask GPT-5.6-Luna for a metadata-only opinion before deciding what to keep.
+Version `0.13.0` adds careful file-level actions to Duplicates and Large files. You can select exact copies or large files for confirmed deletion, and ask GPT-5.6-Luna for a metadata-only opinion before deciding what to keep.
 
 ### Included
 

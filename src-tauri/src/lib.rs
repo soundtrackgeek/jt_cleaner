@@ -163,6 +163,10 @@ fn acquire_scan(flag: Arc<AtomicBool>) -> Result<ScanPermit, String> {
         .map_err(|_| "A scan is already running.".to_string())
 }
 
+fn should_prevent_exit(quitting: bool, code: Option<i32>) -> bool {
+    !quitting && code != Some(tauri::RESTART_EXIT_CODE)
+}
+
 fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -375,10 +379,25 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Luna Clean");
     app.run(|app, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            if !app.state::<RuntimeState>().quitting.load(Ordering::Acquire) {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            if should_prevent_exit(
+                app.state::<RuntimeState>().quitting.load(Ordering::Acquire),
+                code,
+            ) {
                 api.prevent_exit();
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_guard_allows_explicit_quit_and_updater_restart() {
+        assert!(should_prevent_exit(false, None));
+        assert!(!should_prevent_exit(true, None));
+        assert!(!should_prevent_exit(false, Some(tauri::RESTART_EXIT_CODE)));
+    }
 }

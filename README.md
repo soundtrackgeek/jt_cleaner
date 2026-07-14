@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.6.0` adds signed Windows updates and a GitHub Actions release pipeline. Every push to `master` is tested, built as a signed NSIS installer, published as a versioned GitHub Release, and exposed through the app's signed update channel.
+Version `0.6.1` adds signed Windows updates and a GitHub Actions release pipeline. Every push to `master` is tested, built as a signed NSIS installer, published as a versioned GitHub Release, and exposed through the app's signed update channel. The updater restart path is explicitly exempted from Luna's close-to-tray guard and covered by a native regression test.
 
 ### Included
 

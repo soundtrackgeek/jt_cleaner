@@ -9,14 +9,14 @@ Implementation: http://127.0.0.1:1420/
 ### Cleanup review
 
 - Reference: `C:\Users\jtill\.codex\generated_images\019f60fa-83dc-7951-8935-d9ad24788dc6\exec-3302812d-e937-449f-ba2d-acc1ea68053f.png`
-- Implementation capture: `C:\Users\jtill\.codex\visualizations\2026\07\14\019f60fa-83dc-7951-8935-d9ad24788dc6\cleanup-0.6.0.png`
+- Implementation capture: `C:\Users\jtill\.codex\visualizations\2026\07\14\019f60fa-83dc-7951-8935-d9ad24788dc6\cleanup-0.6.1.png`
 - Combined comparison: `C:\Users\jtill\.codex\visualizations\2026\07\14\019f60fa-83dc-7951-8935-d9ad24788dc6\cleanup-comparison.png`
 - Result: the navigation rail, cleanup hierarchy, dense evidence rows, confidence colors, restrained Fluent surfaces, right-side findings panel, and bottom follow-up action match the selected direction. “Reclaim” is intentionally softened to “review” to preserve the product's confirmation-first safety model.
 
 ### Storage composition over time
 
 - Reference: `C:\Users\jtill\.codex\generated_images\019f60fa-83dc-7951-8935-d9ad24788dc6\exec-9e741414-4673-4440-a8bd-4152ea8b2322.png`
-- Implementation capture: `C:\Users\jtill\.codex\visualizations\2026\07\14\019f60fa-83dc-7951-8935-d9ad24788dc6\trends-0.6.0.png`
+- Implementation capture: `C:\Users\jtill\.codex\visualizations\2026\07\14\019f60fa-83dc-7951-8935-d9ad24788dc6\trends-0.6.1.png`
 - Combined comparison: `C:\Users\jtill\.codex\visualizations\2026\07\14\019f60fa-83dc-7951-8935-d9ad24788dc6\trends-comparison.png`
 - Result: the stacked composition chart, compact legend, mover ranking, age-cohort heatmap, growth summary, and narrative rail reproduce the selected direction with a quieter Windows 11 hierarchy. The chart entrance animation was allowed to complete and the final filled layers were verified.
 

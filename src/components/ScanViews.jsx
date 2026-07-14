@@ -294,7 +294,7 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
           <span className={`update-state ${updateState?.phase === "available" ? "has-update" : ""}`}><ArrowDownload24Regular /></span>
           <div>
             <h2>Windows updates</h2>
-            <p>{updateState?.message || `Version ${updateState?.currentVersion || "0.6.0"} · signed release channel`}</p>
+            <p>{updateState?.message || `Version ${updateState?.currentVersion || "0.6.1"} · signed release channel`}</p>
           </div>
           <div className="update-actions">
             <button className="secondary-button" type="button" disabled={updateBusy} onClick={onCheckForUpdates}>{updateState?.phase === "checking" ? "Checking…" : "Check now"}</button>

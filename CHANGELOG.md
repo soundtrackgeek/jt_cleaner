@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1] - 2026-07-14
+
+### Fixed
+
+- Allow Tauri's dedicated updater restart exit code through the close-to-tray guard so a completed in-app update can relaunch immediately.
+- Added a native regression test covering ordinary close-to-tray, explicit quit, and updater restart behavior.
+
 ## [0.6.0] - 2026-07-14
 
 ### Added

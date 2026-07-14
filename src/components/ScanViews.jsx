@@ -36,6 +36,19 @@ function EmptyScan({ onScan, onChooseFolder }) {
   );
 }
 
+function SnapshotWarning({ result, onScan }) {
+  return (
+    <section className="snapshot-warning" role="status">
+      <Warning24Regular />
+      <div>
+        <strong>Showing the latest saved snapshot</strong>
+        <span>This snapshot is from {formatDateTime(result.scannedAt)}. Files may have changed since then.</span>
+      </div>
+      <button className="secondary-button" type="button" onClick={onScan}><ArrowSync24Regular /> Run a new scan</button>
+    </section>
+  );
+}
+
 function FeatureHeader({ eyebrow, title, description, action }) {
   return (
     <header className="feature-header">
@@ -147,7 +160,7 @@ export function OverviewView({ result, scanning, progress, onScan, onChooseFolde
   );
 }
 
-export function ScanResultsView({ result, scanning, progress, error, onScan, onChooseFolder }) {
+export function ScanResultsView({ result, fromSnapshot, scanning, progress, error, onScan, onChooseFolder }) {
   if (scanning) return <ScanProgress progress={progress} />;
   return (
     <div className="feature-view">
@@ -157,6 +170,7 @@ export function ScanResultsView({ result, scanning, progress, error, onScan, onC
         description={result ? result.root : "Luna reads names, sizes, and timestamps locally. It does not open file contents during a storage scan."}
         action={<div className="feature-actions"><button className="secondary-button" type="button" onClick={onChooseFolder}>Choose folder</button><button className="primary-button" type="button" onClick={onScan}>Scan now</button></div>}
       />
+      {result && fromSnapshot && <SnapshotWarning result={result} onScan={onScan} />}
       {error && <div className="inline-error"><Warning24Regular />{error}</div>}
       {!result ? <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} /> : (
         <>
@@ -169,7 +183,7 @@ export function ScanResultsView({ result, scanning, progress, error, onScan, onC
   );
 }
 
-export function StorageView({ result, scanning, progress, onScan, onChooseFolder, onLoadAreas }) {
+export function StorageView({ result, fromSnapshot, scanning, progress, onScan, onChooseFolder, onLoadAreas }) {
   const [trail, setTrail] = useState([]);
   const [areas, setAreas] = useState([]);
   const [loadingPath, setLoadingPath] = useState(false);
@@ -247,6 +261,7 @@ export function StorageView({ result, scanning, progress, onScan, onChooseFolder
         description={result.root}
         action={<button className="secondary-button" type="button" onClick={onChooseFolder}><Folder24Regular /> Choose another folder</button>}
       />
+      {fromSnapshot && <SnapshotWarning result={result} onScan={onScan} />}
       <section className="feature-surface storage-map">
         <div className="storage-pathbar">
           <button className="storage-back-button" type="button" onClick={goBack} disabled={trail.length < 2 || loadingPath}><ArrowLeft24Regular /> Back</button>
@@ -280,18 +295,19 @@ export function StorageView({ result, scanning, progress, onScan, onChooseFolder
   );
 }
 
-export function DuplicatesView({ result, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
+export function DuplicatesView({ result, fromSnapshot, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
-  return <DuplicateFilesPanel result={result} onChooseFolder={onChooseFolder} onDeleteFiles={onDeleteFiles} onAskAi={onAskAi} />;
+  return <DuplicateFilesPanel result={result} notice={fromSnapshot ? <SnapshotWarning result={result} onScan={onScan} /> : null} onChooseFolder={onChooseFolder} onDeleteFiles={onDeleteFiles} onAskAi={onAskAi} />;
 }
 
-export function LargeFilesView({ result, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
+export function LargeFilesView({ result, fromSnapshot, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
   return (
     <div className="feature-view">
       <FeatureHeader eyebrow="Large files" title="The files with the biggest footprint" description="Select files when you want to remove them, or ask Luna for a cautious metadata-only opinion first. Nothing is preselected." action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Choose another folder</button>} />
+      {fromSnapshot && <SnapshotWarning result={result} onScan={onScan} />}
       <LargeFilesPanel result={result} onDeleteFiles={onDeleteFiles} onAskAi={onAskAi} />
     </div>
   );

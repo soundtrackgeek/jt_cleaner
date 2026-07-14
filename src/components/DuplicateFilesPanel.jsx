@@ -64,7 +64,7 @@ function AiDuplicateReview({ envelope }) {
   );
 }
 
-export function DuplicateFilesPanel({ result, onChooseFolder, onDeleteFiles, onAskAi }) {
+export function DuplicateFilesPanel({ result, notice, onChooseFolder, onDeleteFiles, onAskAi }) {
   const [selectedPaths, setSelectedPaths] = useState(() => new Set());
   const [selectionError, setSelectionError] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -154,6 +154,8 @@ export function DuplicateFilesPanel({ result, onChooseFolder, onDeleteFiles, onA
         <div><span>Duplicates</span><h1>{formatBytes(reclaimable)} in exact copies</h1><p>Select only the copies you want to remove. Luna always leaves at least one file from each verified group.</p></div>
         <button className="secondary-button" type="button" onClick={onChooseFolder}>Scan another folder</button>
       </header>
+
+      {notice}
 
       {result.duplicateGroups.length === 0 ? (
         <section className="empty-state-surface"><DocumentCopy24Regular /><h2>No exact duplicates in this scan</h2><p>Try a broader folder or drive if you want to search elsewhere.</p></section>

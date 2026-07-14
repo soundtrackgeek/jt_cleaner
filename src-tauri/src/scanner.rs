@@ -4,6 +4,7 @@ use crate::models::{
 };
 use blake3::Hasher;
 use chrono::{DateTime, Local, SecondsFormat};
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
@@ -41,10 +42,10 @@ struct CategoryAccumulator {
 
 type StorageAreaAccumulators = HashMap<PathBuf, HashMap<PathBuf, CategoryAccumulator>>;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct StorageIndex {
-    root: String,
-    children: HashMap<String, Vec<StorageCategory>>,
+    pub(crate) root: String,
+    pub(crate) children: HashMap<String, Vec<StorageCategory>>,
 }
 
 impl StorageIndex {
@@ -267,6 +268,7 @@ impl LargeFileIndex {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ScanOutput {
     pub(crate) result: ScanResult,
     pub(crate) storage_index: StorageIndex,

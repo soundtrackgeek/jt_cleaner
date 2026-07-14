@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0] - 2026-07-14
+
+### Added
+
+- Restore the latest detailed scan after closing or quitting Luna so Scan results, Storage explorer, Duplicates, and Large files remain available without an immediate rescan.
+- Show the restored snapshot's date and time, warn that files may have changed, and provide a direct **Run a new scan** action in each restored view.
+
+### Changed
+
+- Keep one replaceable detailed latest-scan cache for restart recovery while leaving long-term trend history as compact aggregate snapshots.
+
 ## [0.13.0] - 2026-07-14
 
 ### Added

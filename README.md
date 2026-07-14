@@ -4,13 +4,15 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.13.0` adds careful file-level actions to Duplicates and Large files. You can select exact copies or large files for confirmed deletion, and ask GPT-5.6-Luna for a metadata-only opinion before deciding what to keep.
+Version `0.14.0` restores the latest detailed scan after Luna restarts. Scan results, Storage explorer, Duplicates, and Large files reopen from that snapshot with its capture time, a stale-data warning, and a direct option to run a new scan.
 
 ### Included
 
 - Responsive Windows 11 Fluent-style cleanup review plus Overview, Scan results, Trends, Storage explorer, Duplicates, Large files, Schedule, and Settings surfaces.
 - Folder and drive discovery with native directory selection.
 - A persistent default scan location that is restored whenever the interface opens.
+- Automatic restoration of one locally saved latest detailed scan, including Storage explorer drill-down, duplicate groups, and Large files, after the window or app restarts.
+- A dated snapshot warning and **Run a new scan** action on restored Scan results, Storage explorer, Duplicates, and Large files views.
 - Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
 - Top-level storage aggregation, selectable large-file ranking, and activity-age buckets.
 - Instant Storage explorer drill-down from map tiles and folder rows, including empty folders, direct files, breadcrumbs, and back navigation without a second disk scan.
@@ -67,12 +69,13 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 2. Open **Scan results**, **Storage explorer**, **Duplicates**, or **Large files**.
 3. Choose the default home folder or a detected drive in **Settings**; Luna remembers that default across restarts. Use **Choose folder** for a one-time custom location.
 4. Start the scan and keep the app open while Luna reports progress.
-5. In **Storage explorer**, select a folder in either the map or Largest areas list to see the folders and direct files immediately inside it. Use **Back** or an earlier breadcrumb to move up again.
-6. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files, large files, and old Downloads are never selected automatically.
-7. In **Duplicates**, select only the exact copies you want to remove. Luna keeps at least one verified copy, re-hashes every selected file before deletion, and lets you ask AI about any copy's location and risk.
-8. In **Large files**, select files for permanent deletion or choose **Ask AI** for a conservative verdict and safer storage suggestions based on the selected file's minimized metadata.
-9. Open **Trends** after the scan to compare the current snapshot with earlier scans. Capturing from Trends shows progress in place, and a second scan on the same day refreshes that day instead of adding noise. Choose **Review snapshots** to inspect any capture or delete one after confirmation.
-10. Choose **Investigate with GPT-5.6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
+5. After reopening Luna, those four scan views show the latest saved scan with its date and time. Use **Run a new scan** from the warning whenever you want current filesystem data.
+6. In **Storage explorer**, select a folder in either the map or Largest areas list to see the folders and direct files immediately inside it. Use **Back** or an earlier breadcrumb to move up again.
+7. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files, large files, and old Downloads are never selected automatically.
+8. In **Duplicates**, select only the exact copies you want to remove. Luna keeps at least one verified copy, re-hashes every selected file before deletion, and lets you ask AI about any copy's location and risk.
+9. In **Large files**, select files for permanent deletion or choose **Ask AI** for a conservative verdict and safer storage suggestions based on the selected file's minimized metadata.
+10. Open **Trends** after the scan to compare the current snapshot with earlier scans. Capturing from Trends shows progress in place, and a second scan on the same day refreshes that day instead of adding noise. Choose **Review snapshots** to inspect any capture or delete one after confirmation.
+11. Choose **Investigate with GPT-5.6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
 
 ## Tray and scheduled snapshots
 
@@ -103,7 +106,7 @@ npm run tauri build  # Build the Windows NSIS installer
 
 ## Safety direction
 
-Luna Clean distinguishes rebuildable caches from personal data, defaults review-sensitive files to unselected, and requires confirmation before removal. Category cleanup accepts only known IDs and revalidates cache roots. File-level commands accept only entries from the latest scan, reject symbolic links and changed files, keep one verified copy per duplicate group, and never accept an arbitrary unscanned frontend path. Trend history stays in Luna's local application-data directory as compact JSON aggregates. Aggregate AI reports receive capped totals and signals; explicit file reviews receive only the selected file's minimized metadata, with user prefixes redacted or paths made relative to the scan root. File contents are never sent, and OpenAI response storage is disabled for these requests.
+Luna Clean distinguishes rebuildable caches from personal data, defaults review-sensitive files to unselected, and requires confirmation before removal. Category cleanup accepts only known IDs and revalidates cache roots. File-level commands accept only entries from the latest scan, reject symbolic links and changed files, keep one verified copy per duplicate group, and never accept an arbitrary unscanned frontend path. Trend history stays in Luna's local application-data directory as compact JSON aggregates. Separately, Luna keeps one detailed latest-scan cache locally so the scan views can survive a restart; every successful foreground or scheduled scan replaces it. Aggregate AI reports receive capped totals and signals; explicit file reviews receive only the selected file's minimized metadata, with user prefixes redacted or paths made relative to the scan root. File contents are never sent, and OpenAI response storage is disabled for these requests.
 
 ## Planned next stages
 

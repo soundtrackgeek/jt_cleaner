@@ -1,6 +1,7 @@
 mod ai;
 mod duplicates;
 mod history;
+mod latest_scan;
 mod models;
 mod scanner;
 mod schedule;
@@ -86,6 +87,33 @@ fn app_status(app: AppHandle) -> AppStatus {
 #[tauri::command]
 fn list_scan_roots() -> Vec<ScanRootInfo> {
     scanner::list_scan_roots()
+}
+
+#[tauri::command]
+fn get_latest_scan(
+    app: AppHandle,
+    state: State<'_, RuntimeState>,
+) -> Result<Option<ScanResult>, String> {
+    let Some(output) = latest_scan::load(&latest_scan_file(&app)?)? else {
+        return Ok(None);
+    };
+    let large_file_index =
+        scanner::LargeFileIndex::from_scan(&output.result.root, &output.result.large_files);
+    *state
+        .duplicate_groups
+        .write()
+        .map_err(|_| "The duplicate scan index is unavailable.".to_string())? =
+        output.result.duplicate_groups.clone();
+    *state
+        .storage_index
+        .write()
+        .map_err(|_| "The storage explorer index is unavailable.".to_string())? =
+        output.storage_index;
+    *state
+        .large_file_index
+        .write()
+        .map_err(|_| "The large-file scan index is unavailable.".to_string())? = large_file_index;
+    Ok(Some(output.result))
 }
 
 #[tauri::command]
@@ -379,6 +407,10 @@ fn history_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(history::history_path(&app_data_dir(app)?))
 }
 
+fn latest_scan_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app_data_dir(app)?.join("latest-scan.json"))
+}
+
 fn schedule_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(app_data_dir(app)?.join("schedule.json"))
 }
@@ -398,6 +430,7 @@ fn perform_scan(
         }
     })?;
     history::save_snapshot(&history_file(app)?, &output.result)?;
+    latest_scan::save(&latest_scan_file(app)?, &output)?;
     schedule::mark_capture(&schedule_file(app)?, path)?;
     Ok(output)
 }
@@ -584,6 +617,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_status,
             list_scan_roots,
+            get_latest_scan,
             scan_path,
             list_storage_areas,
             clean_items,

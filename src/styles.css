@@ -584,6 +584,51 @@ input:focus-visible {
   background: var(--mint-soft);
 }
 
+.snapshot-warning {
+  min-height: 68px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(244, 182, 63, 0.3);
+  border-radius: var(--radius);
+  background: var(--amber-soft);
+  color: #e9c981;
+}
+
+.snapshot-warning > svg {
+  width: 20px;
+  color: var(--amber);
+}
+
+.snapshot-warning div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.snapshot-warning strong {
+  font-size: 12px;
+}
+
+.snapshot-warning span {
+  color: #c4aa72;
+  font-size: 10px;
+}
+
+.snapshot-warning button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.snapshot-warning button svg {
+  width: 17px;
+}
+
 .scan-summary-line > svg {
   color: var(--mint);
 }
@@ -4207,6 +4252,15 @@ button.treemap-node:disabled {
 }
 
 @media (max-width: 900px) {
+  .snapshot-warning {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .snapshot-warning button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
   .trends-header {
     flex-direction: column;
   }

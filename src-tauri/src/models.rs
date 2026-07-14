@@ -31,7 +31,7 @@ pub struct AgeBuckets {
     pub unknown_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageCategory {
     pub name: String,
@@ -42,7 +42,7 @@ pub struct StorageCategory {
     pub can_drill_down: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LargeFile {
     pub name: String,
@@ -74,7 +74,7 @@ pub struct LargeFileDeleteResult {
     pub failed: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateFile {
     pub name: String,
@@ -82,7 +82,7 @@ pub struct DuplicateFile {
     pub last_used_days: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateGroup {
     pub content_hash: String,
@@ -91,7 +91,7 @@ pub struct DuplicateGroup {
     pub files: Vec<DuplicateFile>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanupItem {
     pub id: String,
@@ -110,7 +110,7 @@ pub struct CleanupItem {
     pub evidence_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub root: String,

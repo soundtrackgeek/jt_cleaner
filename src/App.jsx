@@ -504,10 +504,11 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.11.0");
+  const [appVersion, setAppVersion] = useState("0.14.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
+  const [resultFromSnapshot, setResultFromSnapshot] = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
   const [scanError, setScanError] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -519,7 +520,7 @@ export function App() {
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.11.0", availableVersion: "", progress: 0, message: "" });
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.14.0", availableVersion: "", progress: 0, message: "" });
   const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
   const updateCheckInFlightRef = useRef(false);
@@ -542,11 +543,17 @@ export function App() {
   useEffect(() => {
     if (!isTauri) return;
     setTrendHistory(null);
-    Promise.all([invoke("app_status"), invoke("list_scan_roots"), invoke("get_schedule_status"), isAutostartEnabled(), invoke("ai_status")])
-      .then(([status, roots, schedule, autostart, ai]) => {
+    Promise.all([invoke("app_status"), invoke("list_scan_roots"), invoke("get_schedule_status"), isAutostartEnabled(), invoke("ai_status"), invoke("get_latest_scan").catch(() => null)])
+      .then(([status, roots, schedule, autostart, ai, latestScan]) => {
         setAppVersion(status.version);
         setScanRoots(roots);
-        setSelectedRoot(status.defaultScanRoot || roots[0]?.path || "");
+        setSelectedRoot(latestScan?.root || status.defaultScanRoot || roots[0]?.path || "");
+        if (latestScan) {
+          setScanResult(latestScan);
+          setResultFromSnapshot(true);
+          setItems(latestScan.cleanupItems.map(mapCleanupItem));
+          setExpandedId(latestScan.cleanupItems.find((item) => item.sizeBytes > 0)?.id || "");
+        }
         setScheduleStatus(schedule);
         setStartupEnabled(autostart);
         setAiStatus(ai);
@@ -592,6 +599,15 @@ export function App() {
         setScheduleStatus((current) => ({ ...current, isScanning: false, lastRunAt: event.payload.scannedAt }));
         setToast(`Snapshot captured — ${formatBytes(event.payload.totalBytes)} measured.`);
         invoke("get_schedule_status").then(setScheduleStatus).catch(() => undefined);
+        const latestScan = await invoke("get_latest_scan").catch(() => null);
+        if (latestScan) {
+          setScanResult(latestScan);
+          setResultFromSnapshot(true);
+          setSelectedRoot(latestScan.root);
+          setItems(latestScan.cleanupItems.map(mapCleanupItem));
+          setExpandedId(latestScan.cleanupItems.find((item) => item.sizeBytes > 0)?.id || "");
+          setAiReport(null);
+        }
         if (event.payload.root === selectedRoot) {
           invoke("get_trend_history", { root: selectedRoot }).then(setTrendHistory).catch(() => undefined);
         }
@@ -640,6 +656,7 @@ export function App() {
     try {
       const result = await invoke("scan_path", { path });
       setScanResult(result);
+      setResultFromSnapshot(false);
       setSelectedRoot(path);
       setItems(result.cleanupItems.map(mapCleanupItem));
       const history = await invoke("get_trend_history", { root: path });
@@ -1070,6 +1087,7 @@ export function App() {
   const reviewItems = items.filter((item) => item.group === "review");
   const viewProps = {
     result: scanResult,
+    fromSnapshot: resultFromSnapshot,
     scanning,
     progress: scanProgress,
     error: scanError,

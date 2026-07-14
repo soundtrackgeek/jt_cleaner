@@ -275,7 +275,7 @@ where
 
         if entry.file_type().is_dir() {
             folder_count = folder_count.saturating_add(1);
-            storage_areas.entry(entry.path().to_path_buf()).or_default();
+            record_storage_directory(&root, entry.path(), &mut storage_areas);
             continue;
         }
 
@@ -522,6 +522,31 @@ fn record_storage_file(
         }
         child = parent;
     }
+}
+
+fn record_storage_directory(
+    root: &Path,
+    directory: &Path,
+    storage_areas: &mut StorageAreaAccumulators,
+) {
+    storage_areas.entry(directory.to_path_buf()).or_default();
+    let Some(parent) = directory.parent().filter(|parent| parent.starts_with(root)) else {
+        return;
+    };
+    let name = directory
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| directory.to_string_lossy().to_string());
+    storage_areas
+        .entry(parent.to_path_buf())
+        .or_default()
+        .entry(directory.to_path_buf())
+        .or_insert_with(|| CategoryAccumulator {
+            name,
+            path: directory.to_path_buf(),
+            can_drill_down: true,
+            ..CategoryAccumulator::default()
+        });
 }
 
 fn activity_time(metadata: &fs::Metadata) -> Option<SystemTime> {
@@ -1153,6 +1178,75 @@ mod tests {
         assert_eq!(progress.scanned_bytes, 706);
         assert_eq!(progress.drive_total_bytes, Some(475));
         assert_eq!(progress.drive_used_bytes, Some(434));
+    }
+
+    #[test]
+    fn storage_index_groups_every_immediate_folder_level() {
+        let root = PathBuf::from("scan-root");
+        let alice = root.join("Users").join("Alice");
+        let bob = root.join("Users").join("Bob");
+        let empty = root.join("Users").join("Empty");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 86_400);
+        let mut accumulators = StorageAreaAccumulators::new();
+        accumulators.insert(root.clone(), HashMap::new());
+
+        record_storage_file(
+            &root,
+            &alice.join("Documents").join("report.txt"),
+            70,
+            Some(now),
+            &mut accumulators,
+        );
+        record_storage_file(
+            &root,
+            &bob.join("photo.jpg"),
+            30,
+            Some(now),
+            &mut accumulators,
+        );
+        record_storage_file(
+            &root,
+            &root.join("pagefile.sys"),
+            20,
+            Some(now),
+            &mut accumulators,
+        );
+        record_storage_directory(&root, &empty, &mut accumulators);
+
+        let index = StorageIndex::from_accumulators(&root, accumulators, now);
+        let root_areas = index.areas_for(&root.to_string_lossy()).unwrap();
+        let users = root_areas.iter().find(|area| area.name == "Users").unwrap();
+        assert_eq!(users.size_bytes, 100);
+        assert!(users.can_drill_down);
+        assert!(
+            root_areas
+                .iter()
+                .any(|area| area.name == "Files at root" && !area.can_drill_down)
+        );
+
+        let user_areas = index
+            .areas_for(&root.join("Users").to_string_lossy())
+            .unwrap();
+        assert_eq!(user_areas.len(), 3);
+        assert_eq!(user_areas[0].name, "Alice");
+        assert_eq!(user_areas[0].size_bytes, 70);
+        assert!(
+            user_areas
+                .iter()
+                .any(|area| area.name == "Empty" && area.size_bytes == 0 && area.can_drill_down)
+        );
+        assert!(
+            index
+                .areas_for(&empty.to_string_lossy())
+                .unwrap()
+                .is_empty()
+        );
+
+        let alice_areas = index.areas_for(&alice.to_string_lossy()).unwrap();
+        assert_eq!(alice_areas[0].name, "Documents");
+        let bob_areas = index.areas_for(&bob.to_string_lossy()).unwrap();
+        assert_eq!(bob_areas[0].name, "Files in this folder");
+        assert!(!bob_areas[0].can_drill_down);
     }
 
     #[cfg(windows)]

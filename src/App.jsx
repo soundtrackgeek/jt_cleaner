@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
@@ -381,7 +381,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.10.0");
+  const [appVersion, setAppVersion] = useState("0.11.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -396,7 +396,7 @@ export function App() {
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.10.0", availableVersion: "", progress: 0, message: "" });
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.11.0", availableVersion: "", progress: 0, message: "" });
   const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
   const updateCheckInFlightRef = useRef(false);
@@ -531,6 +531,13 @@ export function App() {
       setScanning(false);
     }
   }
+
+  const loadStorageAreas = useCallback(async (path) => {
+    if (!isTauri) {
+      return path === scanResult?.root ? scanResult.categories : [];
+    }
+    return invoke("list_storage_areas", { path });
+  }, [isTauri, scanResult]);
 
   async function deleteTrendSnapshot(capturedAt) {
     if (!isTauri || !selectedRoot) {
@@ -830,7 +837,7 @@ export function App() {
   const featureViews = {
     overview: <OverviewView {...viewProps} />,
     scan: <ScanResultsView {...viewProps} />,
-    storage: <StorageView {...viewProps} />,
+    storage: <StorageView {...viewProps} onLoadAreas={loadStorageAreas} />,
     duplicates: <DuplicatesView {...viewProps} />,
     large: <LargeFilesView {...viewProps} />,
     schedule: (

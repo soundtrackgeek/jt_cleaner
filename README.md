@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.10.0` adds a local capture-time picker to scheduled snapshots. Daily, weekly, and monthly schedules can now run at a chosen time such as `08:30` or `09:00`.
+Version `0.11.0` adds drill-down navigation to Storage explorer. Select any folder in the proportional map or Largest areas list to inspect its immediate contents, then use **Back** or the breadcrumb to return.
 
 ### Included
 
@@ -13,6 +13,7 @@ Version `0.10.0` adds a local capture-time picker to scheduled snapshots. Daily,
 - A persistent default scan location that is restored whenever the interface opens.
 - Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
 - Top-level storage aggregation, large-file ranking, and activity-age buckets.
+- Instant Storage explorer drill-down from map tiles and folder rows, including empty folders, direct files, breadcrumbs, and back navigation without a second disk scan.
 - Windows-reported used space and total capacity for whole-drive scan summaries and trend snapshots.
 - Exact duplicate detection using size grouping followed by BLAKE3 content hashes.
 - Browser, Codex, and Windows temporary-cache discovery.
@@ -65,9 +66,10 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 2. Open **Scan results**, **Storage explorer**, **Duplicates**, or **Large files**.
 3. Choose the default home folder or a detected drive in **Settings**; Luna remembers that default across restarts. Use **Choose folder** for a one-time custom location.
 4. Start the scan and keep the app open while Luna reports progress.
-5. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files and old Downloads are never selected automatically.
-6. Open **Trends** after the scan to compare the current snapshot with earlier scans. Capturing from Trends shows progress in place, and a second scan on the same day refreshes that day instead of adding noise. Choose **Review snapshots** to inspect any capture or delete one after confirmation.
-7. Choose **Investigate with GPT-5.6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
+5. In **Storage explorer**, select a folder in either the map or Largest areas list to see the folders and direct files immediately inside it. Use **Back** or an earlier breadcrumb to move up again.
+6. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files and old Downloads are never selected automatically.
+7. Open **Trends** after the scan to compare the current snapshot with earlier scans. Capturing from Trends shows progress in place, and a second scan on the same day refreshes that day instead of adding noise. Choose **Review snapshots** to inspect any capture or delete one after confirmation.
+8. Choose **Investigate with GPT-5.6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
 
 ## Tray and scheduled snapshots
 

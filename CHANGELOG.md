@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0] - 2026-07-14
+
+### Added
+
+- Drill into any folder directly from its Storage map tile or Largest areas row, with the map and complete immediate-folder list updating to the selected location.
+- Navigate back through explored storage with a dedicated **Back** button or any earlier breadcrumb.
+
+### Changed
+
+- Keep a local in-memory folder index from the completed scan so Storage explorer navigation is instant, includes empty folders and direct files, and does not rescan the disk.
+
 ## [0.10.0] - 2026-07-14
 
 ### Added

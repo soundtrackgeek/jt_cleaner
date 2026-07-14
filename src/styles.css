@@ -347,6 +347,31 @@ input:focus-visible {
   background: rgba(255, 255, 255, 0.018);
 }
 
+.storage-area-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.storage-area-row:hover {
+  background: rgba(121, 108, 255, 0.07);
+}
+
+.storage-area-row .row-drill-icon {
+  width: 16px;
+  margin-left: auto;
+  color: #8f86ff;
+}
+
+.storage-area-empty {
+  margin: 0;
+  padding: 24px 18px;
+  color: var(--quiet);
+  font-size: 10px;
+}
+
 .path-cell {
   min-width: 0;
   display: flex;
@@ -622,12 +647,118 @@ input:focus-visible {
   padding-bottom: 14px;
 }
 
+.storage-pathbar {
+  min-height: 46px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.storage-back-button {
+  min-height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #c5ccd6;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.storage-back-button:hover:not(:disabled) {
+  border-color: rgba(121, 108, 255, 0.42);
+  background: var(--violet-soft);
+}
+
+.storage-back-button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.storage-back-button svg {
+  width: 15px;
+}
+
+.storage-breadcrumbs {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.storage-breadcrumbs::-webkit-scrollbar {
+  display: none;
+}
+
+.storage-breadcrumbs > span {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.storage-breadcrumbs i {
+  margin: 0 3px;
+  color: #596678;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.storage-breadcrumbs button {
+  max-width: 220px;
+  padding: 5px 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #99a5b5;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.storage-breadcrumbs button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+  color: #e5e9ef;
+}
+
+.storage-breadcrumbs button[aria-current="page"] {
+  color: #eceff4;
+  font-weight: 620;
+  cursor: default;
+  opacity: 1;
+}
+
+.storage-path-status {
+  margin-left: auto;
+  flex: none;
+  color: #938aff;
+  font-size: 9px;
+}
+
+.storage-navigation-error {
+  margin: 10px 10px 0;
+}
+
 .treemap {
   min-height: 430px;
   padding: 8px;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+.treemap.is-loading {
+  opacity: 0.58;
 }
 
 .treemap-node {
@@ -642,6 +773,23 @@ input:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: 8px;
   background: #21334e;
+}
+
+button.treemap-node {
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, filter 120ms ease, transform 120ms ease;
+}
+
+button.treemap-node:hover:not(:disabled) {
+  border-color: rgba(158, 150, 255, 0.68);
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+button.treemap-node:disabled {
+  cursor: wait;
 }
 
 .treemap-node strong {
@@ -669,6 +817,32 @@ input:focus-visible {
 .treemap-tone-2 { background: #2a3352; }
 .treemap-tone-3 { background: #233a42; }
 .treemap-tone-4 { background: #29334a; }
+
+.treemap-empty {
+  width: 100%;
+  min-height: 250px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--quiet);
+  text-align: center;
+}
+
+.treemap-empty svg {
+  width: 28px;
+  color: #8178dd;
+}
+
+.treemap-empty strong {
+  color: #d9dee6;
+  font-size: 12px;
+}
+
+.treemap-empty span {
+  font-size: 9px;
+}
 
 .duplicate-list details + details {
   border-top: 1px solid var(--line);

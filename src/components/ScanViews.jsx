@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft24Regular,
   ArrowRight24Regular,
   ArrowDownload24Regular,
   ArrowSync24Regular,
@@ -87,24 +88,33 @@ function AgeDistribution({ result }) {
   );
 }
 
-function CategoryTable({ result, limit }) {
-  const maximum = Math.max(...result.categories.map((category) => category.sizeBytes), 1);
+function CategoryTable({ result, categories = result?.categories || [], limit, onCategoryOpen, title = "Largest areas", description = "Grouped by the first folder beneath the selected root." }) {
+  const maximum = Math.max(...categories.map((category) => category.sizeBytes), 1);
+  const visibleCategories = limit == null ? categories : categories.slice(0, limit);
   return (
     <section className="feature-surface category-table">
       <div className="surface-heading">
-        <div><h2>Largest areas</h2><p>Grouped by the first folder beneath the selected root.</p></div>
-        <span>{result.categories.length} areas</span>
+        <div><h2>{title}</h2><p>{description}</p></div>
+        <span>{categories.length} areas</span>
       </div>
       <div className="data-table category-data-table">
         <div className="data-header"><span>Name</span><span>Space</span><span>Files</span><span>Last activity</span></div>
-        {result.categories.slice(0, limit).map((category) => (
-          <div className="data-row" key={category.path}>
-            <div className="path-cell"><Folder24Regular /><span><strong>{category.name}</strong><small>{category.path}</small></span></div>
-            <div className="size-with-bar"><strong>{formatBytes(category.sizeBytes)}</strong><i><b style={{ width: `${Math.max((category.sizeBytes / maximum) * 100, 2)}%` }} /></i></div>
-            <span>{formatCount(category.fileCount)}</span>
-            <span>{category.lastUsedDays == null ? "Unknown" : `${category.lastUsedDays} days ago`}</span>
-          </div>
-        ))}
+        {visibleCategories.map((category) => {
+          const content = (
+            <>
+              <div className="path-cell"><Folder24Regular /><span><strong>{category.name}</strong><small>{category.path}</small></span>{category.canDrillDown && onCategoryOpen && <ArrowRight24Regular className="row-drill-icon" />}</div>
+              <div className="size-with-bar"><strong>{formatBytes(category.sizeBytes)}</strong><i><b style={{ width: `${Math.max((category.sizeBytes / maximum) * 100, 2)}%` }} /></i></div>
+              <span>{formatCount(category.fileCount)}</span>
+              <span>{category.lastUsedDays == null ? "Unknown" : `${category.lastUsedDays} days ago`}</span>
+            </>
+          );
+          return category.canDrillDown && onCategoryOpen ? (
+            <button className="data-row storage-area-row" type="button" key={category.path} onClick={() => onCategoryOpen(category)} aria-label={`Open ${category.name}`}>{content}</button>
+          ) : (
+            <div className="data-row" key={category.path}>{content}</div>
+          );
+        })}
+        {visibleCategories.length === 0 && <p className="storage-area-empty">No folders or files were measured at this level.</p>}
       </div>
     </section>
   );
@@ -157,11 +167,76 @@ export function ScanResultsView({ result, scanning, progress, error, onScan, onC
   );
 }
 
-export function StorageView({ result, scanning, progress, onScan, onChooseFolder }) {
+export function StorageView({ result, scanning, progress, onScan, onChooseFolder, onLoadAreas }) {
+  const [trail, setTrail] = useState([]);
+  const [areas, setAreas] = useState([]);
+  const [loadingPath, setLoadingPath] = useState(false);
+  const [navigationError, setNavigationError] = useState("");
+
+  useEffect(() => {
+    if (!result) {
+      setTrail([]);
+      setAreas([]);
+      return undefined;
+    }
+
+    const rootLocation = { name: result.rootName, path: result.root };
+    let cancelled = false;
+    setTrail([rootLocation]);
+    setAreas(result.categories);
+    setNavigationError("");
+    if (!onLoadAreas) return undefined;
+
+    setLoadingPath(true);
+    onLoadAreas(result.root)
+      .then((nextAreas) => {
+        if (!cancelled) setAreas(nextAreas);
+      })
+      .catch((error) => {
+        if (!cancelled) setNavigationError(String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPath(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [result, onLoadAreas]);
+
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
-  const displayed = result.categories.slice(0, 12);
-  const total = Math.max(displayed.reduce((sum, item) => sum + item.sizeBytes, 0), 1);
+
+  const currentLocation = trail.at(-1) || { name: result.rootName, path: result.root };
+  const displayed = areas.slice(0, 12);
+  const measuredTotal = areas.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const total = Math.max(measuredTotal, 1);
+
+  async function openLocation(location, trailIndex) {
+    if (!onLoadAreas || loadingPath) return;
+    setLoadingPath(true);
+    setNavigationError("");
+    try {
+      const nextAreas = await onLoadAreas(location.path);
+      setAreas(nextAreas);
+      setTrail((current) => trailIndex == null
+        ? [...current, { name: location.name, path: location.path }]
+        : current.slice(0, trailIndex + 1));
+    } catch (error) {
+      setNavigationError(String(error));
+    } finally {
+      setLoadingPath(false);
+    }
+  }
+
+  function goBack() {
+    if (trail.length < 2) return;
+    openLocation(trail[trail.length - 2], trail.length - 2);
+  }
+
+  const areaDescription = trail.length > 1
+    ? `Folders and files directly inside ${currentLocation.name}.`
+    : "Grouped by the first folder beneath the selected root.";
+
   return (
     <div className="feature-view">
       <FeatureHeader
@@ -171,16 +246,34 @@ export function StorageView({ result, scanning, progress, onScan, onChooseFolder
         action={<button className="secondary-button" type="button" onClick={onChooseFolder}><Folder24Regular /> Choose another folder</button>}
       />
       <section className="feature-surface storage-map">
-        <div className="surface-heading"><div><h2>Storage map</h2><p>Area is proportional to the folder’s scanned size.</p></div><strong>{formatScanSize(result)}</strong></div>
-        <div className="treemap" role="img" aria-label="Proportional storage map">
-          {displayed.map((category, index) => (
+        <div className="storage-pathbar">
+          <button className="storage-back-button" type="button" onClick={goBack} disabled={trail.length < 2 || loadingPath}><ArrowLeft24Regular /> Back</button>
+          <nav className="storage-breadcrumbs" aria-label="Storage location">
+            {trail.map((location, index) => (
+              <span key={location.path}>
+                {index > 0 && <i aria-hidden="true">/</i>}
+                <button type="button" onClick={() => openLocation(location, index)} disabled={index === trail.length - 1 || loadingPath} aria-current={index === trail.length - 1 ? "page" : undefined}>{location.name}</button>
+              </span>
+            ))}
+          </nav>
+          {loadingPath && <span className="storage-path-status" role="status">Opening…</span>}
+        </div>
+        <div className="surface-heading"><div><h2>Storage map</h2><p>Area is proportional to the folder’s scanned size. Select a folder to explore it.</p></div><strong>{trail.length === 1 ? formatScanSize(result) : formatBytes(measuredTotal)}</strong></div>
+        {navigationError && <div className="inline-error storage-navigation-error"><Warning24Regular />{navigationError}</div>}
+        <div className={`treemap ${loadingPath ? "is-loading" : ""}`} role="group" aria-label={`Proportional storage map for ${currentLocation.path}`}>
+          {displayed.map((category, index) => category.canDrillDown ? (
+            <button className={`treemap-node treemap-tone-${index % 5}`} type="button" key={category.path} onClick={() => openLocation(category)} disabled={loadingPath} style={{ flexGrow: Math.max(category.sizeBytes / total, 0.025), flexBasis: `${Math.max((category.sizeBytes / total) * 100, 8)}%` }}>
+              <strong>{category.name}</strong><span>{formatBytes(category.sizeBytes)}</span><small>{category.lastUsedDays == null ? "Activity unknown" : `Last activity ${category.lastUsedDays} days ago`}</small>
+            </button>
+          ) : (
             <div className={`treemap-node treemap-tone-${index % 5}`} key={category.path} style={{ flexGrow: Math.max(category.sizeBytes / total, 0.025), flexBasis: `${Math.max((category.sizeBytes / total) * 100, 8)}%` }}>
               <strong>{category.name}</strong><span>{formatBytes(category.sizeBytes)}</span><small>{category.lastUsedDays == null ? "Activity unknown" : `Last activity ${category.lastUsedDays} days ago`}</small>
             </div>
           ))}
+          {displayed.length === 0 && <div className="treemap-empty"><Folder24Regular /><strong>Nothing deeper here</strong><span>This folder has no measured child folders or direct files.</span></div>}
         </div>
       </section>
-      <CategoryTable result={result} limit={24} />
+      <CategoryTable result={result} categories={areas} onCategoryOpen={openLocation} description={areaDescription} />
     </div>
   );
 }

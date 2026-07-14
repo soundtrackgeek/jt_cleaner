@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.4.0` adds native Windows tray operation, opt-in startup with Windows, and automatic snapshot scheduling. Hidden startup creates no WebView; Luna keeps a small Rust tray process available and constructs the full interface only when you open it.
+Version `0.5.0` adds GPT-5.6-Luna storage investigations and secure in-app OpenAI key setup. Keys entered in Settings are validated by the Rust backend and saved for the current Windows user in Credential Manager, never frontend storage or Luna's JSON files.
 
 ### Included
 
@@ -24,6 +24,10 @@ Version `0.4.0` adds native Windows tray operation, opt-in startup with Windows,
 - Daily, weekly, or monthly background snapshot scheduling with weekly as the default.
 - A single-scan guard shared by foreground and scheduled scans.
 - Close-to-tray behavior that destroys the WebView instead of keeping the full interface hidden in memory.
+- GPT-5.6-Luna investigation reports and follow-up questions using minimized aggregate scan metadata.
+- Strict structured AI responses with evidence, confidence, risk, and review-safe next actions.
+- Masked in-app OpenAI key setup with Rust-side validation and Windows Credential Manager storage.
+- Development fallback through `OPENAI_API_KEY`, with the saved Windows credential taking priority.
 - Native Tauri 2 shell and NSIS bundle configuration.
 
 ## Prerequisites
@@ -41,7 +45,9 @@ Copy-Item .env.example .env
 npm run tauri dev
 ```
 
-Set `OPENAI_API_KEY` in `.env` for the upcoming AI reporting stage. `.env` is ignored by Git and the key is read only by the Rust backend.
+For normal use, open **Settings**, enter an OpenAI API key, and choose **Save key**. Luna validates access to the configured model before saving the key in Windows Credential Manager. The masked field is cleared immediately, and the key is never placed in browser storage or Luna's JSON settings.
+
+For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignored by Git and read only by the Rust backend. A key saved in Windows Credential Manager takes priority over this environment fallback. Set `OPENAI_MODEL` only when testing a compatible alternate model; the default is `gpt-5.6-luna`.
 
 ## Using the scanner
 
@@ -51,6 +57,7 @@ Set `OPENAI_API_KEY` in `.env` for the upcoming AI reporting stage. `.env` is ig
 4. Start the scan and keep the app open while Luna reports progress.
 5. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files and old Downloads are never selected automatically.
 6. Open **Trends** after the scan to compare the current snapshot with earlier scans. A second scan on the same day refreshes that day instead of adding noise.
+7. Choose **Investigate with GPT-5.6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
 
 ## Tray and scheduled snapshots
 
@@ -72,8 +79,9 @@ npm run tauri build  # Build the Windows NSIS installer
 
 ## Safety direction
 
-Luna Clean distinguishes rebuildable caches from personal data, defaults review-sensitive files to unselected, and requires confirmation before removal. The Rust cleanup command accepts category IDs—not arbitrary frontend paths—and revalidates every known cache root before deleting its contents. Trend history stays in Luna's local application-data directory as compact JSON aggregates. The future AI report will receive minimized scan metadata rather than file contents unless a feature explicitly asks for and explains broader access.
+Luna Clean distinguishes rebuildable caches from personal data, defaults review-sensitive files to unselected, and requires confirmation before removal. The Rust cleanup command accepts category IDs—not arbitrary frontend paths—and revalidates every known cache root before deleting its contents. Trend history stays in Luna's local application-data directory as compact JSON aggregates. AI reporting receives capped category totals, cleanup signals, age buckets, duplicate opportunity, and trend totals—not file contents or a raw file inventory—and OpenAI response storage is disabled for these requests.
 
 ## Planned next stages
 
-- GPT-5.6-Luna investigation reports and evidence-backed follow-up questions.
+- Signed Windows updates installed from inside Luna Clean.
+- GitHub Actions quality checks and automatic versioned GitHub Releases.

@@ -119,7 +119,7 @@ function EmptyTrends({ onCapture }) {
   );
 }
 
-export function TrendsView({ history, onCapture, onAsk }) {
+export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy }) {
   const resolvedHistory = history || (!window.__TAURI_INTERNALS__ ? previewTrendHistory : null);
   const snapshots = resolvedHistory?.snapshots || [];
   if (!snapshots.length) return <EmptyTrends onCapture={onCapture} />;
@@ -165,6 +165,12 @@ export function TrendsView({ history, onCapture, onAsk }) {
   const staleDelta = latest.ageBuckets.inactive180PlusBytes - first.ageBuckets.inactive180PlusBytes;
   const fastestMover = movers[0];
   const heatMaximum = Math.max(...snapshots.flatMap((snapshot) => ageRows.map(([key]) => snapshot.ageBuckets[key] || 0)), 1);
+  const report = aiReport?.report;
+  const storyFindings = report?.findings || [
+    { title: `${fastestMover?.name || "Your largest folder"} moved fastest`, detail: fastestMover ? `${formatDelta(fastestMover.delta)} across the measured period. It now uses ${formatBytes(fastestMover.sizeBytes)}.` : "Capture another snapshot to compare categories." },
+    { title: `Older storage is ${staleDelta >= 0 ? "accumulating" : "clearing"}`, detail: `The 180+ day cohort changed by ${formatDelta(staleDelta)}. Age is a review signal, not an automatic delete rule.` },
+    { title: "Duplicate opportunity", detail: `${formatBytes(latest.duplicateReclaimableBytes)} is represented by additional exact copies in the latest scan.` },
+  ];
 
   return (
     <>
@@ -257,20 +263,20 @@ export function TrendsView({ history, onCapture, onAsk }) {
           <h2>Luna’s storage story</h2>
           <button className="icon-button" type="button" aria-label="More trend actions"><MoreHorizontal24Regular /></button>
         </div>
-        <p className="trend-story-intro">Here’s what changed across your snapshots.</p>
+        <p className="trend-story-intro">{report?.summary || "Here’s what changed across your snapshots."}</p>
         <div className="story-hero">
           <span>{totalDelta >= 0 ? "Storage grew" : "Storage shrank"}</span>
           <strong>{formatDelta(totalDelta)}</strong>
           <small>from {shortDate(first.capturedAt)} to {shortDate(latest.capturedAt)}</small>
         </div>
         <ol className="story-findings">
-          <li><span>1</span><div><h3>{fastestMover?.name || "Your largest folder"} moved fastest</h3><p>{fastestMover ? `${formatDelta(fastestMover.delta)} across the measured period. It now uses ${formatBytes(fastestMover.sizeBytes)}.` : "Capture another snapshot to compare categories."}</p></div></li>
-          <li><span>2</span><div><h3>Older storage is {staleDelta >= 0 ? "accumulating" : "clearing"}</h3><p>The 180+ day cohort changed by {formatDelta(staleDelta)}. Age is a review signal, not an automatic delete rule.</p></div></li>
-          <li><span>3</span><div><h3>Duplicate opportunity</h3><p>{formatBytes(latest.duplicateReclaimableBytes)} is represented by additional exact copies in the latest scan.</p></div></li>
+          {storyFindings.map((finding, index) => (
+            <li key={finding.title}><span>{index + 1}</span><div><h3>{finding.title}</h3><p>{finding.detail}</p></div></li>
+          ))}
         </ol>
         <div className="trend-story-actions">
-          <button className="follow-up-button" type="button" onClick={onAsk}><Chat24Regular /> Ask Luna about this trend</button>
-          <button className="story-link" type="button" onClick={onAsk}>Investigate the changes <ArrowRight20Regular /></button>
+          <button className="follow-up-button" type="button" disabled={aiBusy} onClick={onAsk}><Chat24Regular /> {aiBusy ? "Luna is investigating…" : report ? "Refresh Luna’s trend report" : "Ask Luna about this trend"}</button>
+          <button className="story-link" type="button" disabled={aiBusy} onClick={onAsk}>Investigate the changes <ArrowRight20Regular /></button>
         </div>
       </aside>
     </>

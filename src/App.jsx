@@ -161,6 +161,68 @@ function mapCleanupItem(item) {
   };
 }
 
+const previewAiReport = {
+  model: "gpt-5.6-luna",
+  generatedAt: "2026-07-14T09:24:00+02:00",
+  responseId: "preview",
+  report: {
+    headline: "Caches are the clearest low-risk win",
+    summary: "The aggregate scan points to rebuildable browser and Codex caches first. Older Downloads deserve review, but age alone is not evidence that a personal file should be removed.",
+    riskLevel: "low",
+    answer: "Start with the 8.3 GB of known caches. Then review older Downloads by project rather than deleting them as one group.",
+    findings: [
+      { title: "Rebuildable caches lead the plan", detail: "Browser and Codex caches account for 8.3 GB and can be recreated by their applications.", evidence: "2 safe categories · 8.3 GB", confidence: "high" },
+      { title: "Older Downloads need judgment", detail: "The 90+ day signal identifies review candidates, not files that are proven disposable.", evidence: "7.1 GB · age metadata", confidence: "medium" },
+      { title: "Exact copies may offer another win", detail: "Duplicate groups should be inspected so you can choose which location to keep.", evidence: "Content-hash groups", confidence: "medium" },
+    ],
+    actions: [
+      { label: "Review safe caches", rationale: "Start with rebuildable data.", destination: "cleanup" },
+      { label: "Inspect exact copies", rationale: "Choose the copy that belongs in your workflow.", destination: "duplicates" },
+    ],
+  },
+};
+
+function buildReportContext(scanResult, trendHistory, cleanupItems) {
+  const latest = trendHistory?.snapshots?.at(-1);
+  const totalBytes = scanResult?.totalBytes ?? latest?.totalBytes ?? Math.round(cleanupItems.reduce((sum, item) => sum + item.size, 0) * 1024 ** 3);
+  const ageBuckets = scanResult?.ageBuckets || latest?.ageBuckets || {
+    recentBytes: Math.round(0.6 * 1024 ** 3),
+    inactive30To90Bytes: Math.round(2.1 * 1024 ** 3),
+    inactive90To180Bytes: Math.round(3.4 * 1024 ** 3),
+    inactive180PlusBytes: Math.round(10.3 * 1024 ** 3),
+    unknownBytes: 0,
+  };
+  const categories = (scanResult?.categories || latest?.categories || cleanupItems).map((item) => ({
+    name: item.name,
+    sizeBytes: item.sizeBytes ?? Math.round((item.size || 0) * 1024 ** 3),
+    fileCount: item.fileCount || 0,
+    lastUsedDays: item.lastUsedDays ?? item.age ?? null,
+  }));
+  const cleanupSignals = (scanResult?.cleanupItems || cleanupItems).map((item) => ({
+    name: item.name,
+    group: item.group,
+    sizeBytes: item.sizeBytes ?? Math.round((item.size || 0) * 1024 ** 3),
+    fileCount: item.fileCount || 0,
+    confidence: item.confidence,
+  }));
+  return {
+    rootName: scanResult?.rootName || trendHistory?.rootName || "Selected storage",
+    totalBytes,
+    fileCount: scanResult?.fileCount ?? latest?.fileCount ?? 0,
+    folderCount: scanResult?.folderCount ?? latest?.folderCount ?? 0,
+    categories,
+    cleanupSignals,
+    ageBuckets,
+    duplicateGroupCount: scanResult?.duplicateGroups?.length || 0,
+    duplicateReclaimableBytes: scanResult?.duplicateGroups?.reduce((sum, group) => sum + group.reclaimableBytes, 0) ?? latest?.duplicateReclaimableBytes ?? 0,
+    trendSnapshots: (trendHistory?.snapshots || []).map((snapshot) => ({
+      capturedAt: snapshot.capturedAt,
+      totalBytes: snapshot.totalBytes,
+      inactive180PlusBytes: snapshot.ageBuckets.inactive180PlusBytes,
+    })),
+  };
+}
+
 function NavItem({ item, active, onClick }) {
   const Icon = item.icon;
   return (
@@ -319,7 +381,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.4.0");
+  const [appVersion, setAppVersion] = useState("0.5.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -330,6 +392,9 @@ export function App() {
   const [scheduleStatus, setScheduleStatus] = useState({ enabled: false, frequency: "Weekly", scanRoot: "", isScanning: false });
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [startupBusy, setStartupBusy] = useState(false);
+  const [aiStatus, setAiStatus] = useState({ configured: false, model: "gpt-5.6-luna", source: "none" });
+  const [aiReport, setAiReport] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
   const selectedSize = useMemo(
@@ -348,13 +413,14 @@ export function App() {
   useEffect(() => {
     if (!isTauri) return;
     setTrendHistory(null);
-    Promise.all([invoke("app_status"), invoke("list_scan_roots"), invoke("get_schedule_status"), isAutostartEnabled()])
-      .then(([status, roots, schedule, autostart]) => {
+    Promise.all([invoke("app_status"), invoke("list_scan_roots"), invoke("get_schedule_status"), isAutostartEnabled(), invoke("ai_status")])
+      .then(([status, roots, schedule, autostart, ai]) => {
         setAppVersion(status.version);
         setScanRoots(roots);
         setSelectedRoot(status.defaultScanRoot || roots[0]?.path || "");
         setScheduleStatus(schedule);
         setStartupEnabled(autostart);
+        setAiStatus(ai);
       })
       .catch(() => undefined);
   }, [isTauri]);
@@ -432,6 +498,7 @@ export function App() {
       setItems(result.cleanupItems.map(mapCleanupItem));
       const history = await invoke("get_trend_history", { root: path });
       setTrendHistory(history);
+      setAiReport(null);
       setExpandedId(result.cleanupItems.find((item) => item.sizeBytes > 0)?.id || "");
       setToast(`Scan complete — ${formatBytes(result.totalBytes)} across ${result.fileCount.toLocaleString()} files.`);
     } catch (error) {
@@ -506,6 +573,32 @@ export function App() {
     }
   }
 
+  async function saveApiKey(apiKey) {
+    if (!isTauri) {
+      setAiStatus({ configured: true, model: "gpt-5.6-luna", source: "windowsCredentialManager" });
+      setToast("Preview key validated and stored securely.");
+      return;
+    }
+    const updated = await invoke("save_api_key", { request: { apiKey } });
+    setAiStatus(updated);
+    setToast("OpenAI key validated and saved in Windows Credential Manager.");
+  }
+
+  async function removeApiKey() {
+    if (!isTauri) {
+      const updated = { configured: false, model: "gpt-5.6-luna", source: "none" };
+      setAiStatus(updated);
+      setToast("Preview saved key removed.");
+      return updated;
+    }
+    const updated = await invoke("delete_api_key");
+    setAiStatus(updated);
+    setToast(updated.configured
+      ? "Saved key removed. Luna is using the development environment fallback."
+      : "Saved OpenAI key removed from Windows Credential Manager.");
+    return updated;
+  }
+
   async function completeCleanup() {
     const count = selectedItems.length;
     const size = selectedSize;
@@ -531,12 +624,45 @@ export function App() {
     }
   }
 
-  function submitQuestion(event) {
+  async function runAiInvestigation(userQuestion = "") {
+    if (!isTauri) {
+      setAiReport(previewAiReport);
+      setToast("Preview report generated from the sample aggregate scan.");
+      return;
+    }
+    if (!aiStatus.configured) {
+      setActiveNav("settings");
+      setToast("Add an OpenAI API key in Settings to enable Luna reports.");
+      return;
+    }
+    if (!scanResult && !trendHistory?.snapshots?.length) {
+      setToast("Run a scan first so Luna has local aggregate evidence to investigate.");
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const envelope = await invoke("generate_ai_report", {
+        request: {
+          question: userQuestion.trim() || null,
+          context: buildReportContext(scanResult, trendHistory, items),
+        },
+      });
+      setAiReport(envelope);
+      setToast(`Luna’s report is ready · ${envelope.model}`);
+    } catch (error) {
+      setToast(`Luna report stopped: ${String(error)}`);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function submitQuestion(event) {
     event.preventDefault();
     if (!question.trim()) return;
-    setToast("Your follow-up is queued for Luna’s GPT-5.6 report connection.");
+    const submitted = question;
     setQuestion("");
     setFollowUpOpen(false);
+    await runAiInvestigation(submitted);
   }
 
   const safeItems = items.filter((item) => item.group === "safe");
@@ -574,14 +700,23 @@ export function App() {
         startupEnabled={startupEnabled}
         startupBusy={startupBusy}
         onStartupToggle={toggleStartup}
+        aiStatus={aiStatus}
+        onSaveApiKey={saveApiKey}
+        onRemoveApiKey={removeApiKey}
       />
     ),
   };
   const usedPercent = currentRoot?.totalBytes
     ? ((currentRoot.totalBytes - currentRoot.availableBytes) / currentRoot.totalBytes) * 100
     : 62;
-  const liveFindings = scanResult
-    ? [
+  const liveFindings = aiReport
+    ? aiReport.report.findings.map((finding) => ({
+        title: finding.title,
+        body: finding.detail,
+        evidence: `${finding.evidence} · ${finding.confidence} confidence`,
+      }))
+    : scanResult
+      ? [
         {
           title: "Caches are isolated from personal data",
           body: `${formatBytes(safeItems.reduce((sum, item) => sum + (item.sizeBytes || 0), 0))} sits in known rebuildable cache paths.`,
@@ -597,8 +732,13 @@ export function App() {
           body: `${scanResult.duplicateGroups.length} content-hash groups can be inspected without assuming which copy should be kept.`,
           evidence: "BLAKE3 hashes",
         },
-      ]
-    : findings;
+        ]
+      : findings;
+  const findingsIntro = aiReport
+    ? aiReport.report.summary
+    : scanResult
+      ? "I analyzed your local scan metadata. Ask Luna for a GPT-5.6 investigation when you want a deeper report."
+      : "I analyzed the preview scan results and here’s what stands out.";
   const ageChartEntries = scanResult
     ? [
         [formatBytes(scanResult.ageBuckets.recentBytes), "0–30", "days", scanResult.ageBuckets.recentBytes, "mint"],
@@ -656,7 +796,9 @@ export function App() {
           <TrendsView
             history={trendHistory}
             onCapture={() => runScan()}
-            onAsk={() => setToast("Luna’s GPT-5.6 trend report connection is next in the build queue.")}
+            onAsk={() => runAiInvestigation("Investigate the storage trend over time. Explain the most important movement and the safest next step.")}
+            aiReport={aiReport}
+            aiBusy={aiBusy}
           />
         </Suspense>
       ) : activeNav !== "cleanup" ? (
@@ -722,7 +864,11 @@ export function App() {
           <h2>Luna’s findings</h2>
           <button className="icon-button" type="button" aria-label="More report actions"><MoreHorizontal24Regular /></button>
         </div>
-        <p className="findings-intro">I analyzed your scan results and here’s what stands out.</p>
+        <p className="findings-intro">{findingsIntro}</p>
+        <button className="report-trigger" type="button" disabled={aiBusy} onClick={() => runAiInvestigation()}>
+          <Sparkle24Regular /> {aiBusy ? "Luna is investigating…" : aiReport ? "Refresh GPT-5.6 report" : "Investigate with GPT-5.6-Luna"}
+        </button>
+        {aiReport?.report.answer && <p className="ai-answer">{aiReport.report.answer}</p>}
         <ol className="findings-list">
           {liveFindings.map((finding, index) => (
             <li key={finding.title}>
@@ -763,7 +909,7 @@ export function App() {
               />
               <div>
                 <button className="secondary-button" type="button" onClick={() => setFollowUpOpen(false)}>Cancel</button>
-                <button className="primary-button" type="submit">Ask Luna</button>
+                <button className="primary-button" type="submit" disabled={aiBusy}>{aiBusy ? "Investigating…" : "Ask Luna"}</button>
               </div>
             </form>
           ) : (
@@ -771,7 +917,7 @@ export function App() {
               <Chat24Regular /> Ask a follow-up
             </button>
           )}
-          <span>I can explain anything in this plan.</span>
+          <span>{aiReport ? `${aiReport.model} · report generated ${formatDateTime(aiReport.generatedAt)}` : `${aiStatus.model} · aggregate metadata only`}</span>
         </div>
       </aside>
       </>

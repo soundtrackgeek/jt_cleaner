@@ -235,9 +235,49 @@ export function ScheduleView({ schedule, roots, selectedRoot, onScheduleChange, 
   );
 }
 
-export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder, startupEnabled, startupBusy, onStartupToggle }) {
+export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder, startupEnabled, startupBusy, onStartupToggle, aiStatus, onSaveApiKey, onRemoveApiKey }) {
   const [diagnostics, setDiagnostics] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [credentialBusy, setCredentialBusy] = useState(false);
+  const [credentialMessage, setCredentialMessage] = useState("");
   const root = useMemo(() => roots.find((entry) => entry.path === selectedRoot), [roots, selectedRoot]);
+  const credentialSource = aiStatus?.source === "windowsCredentialManager"
+    ? "Saved securely in Windows Credential Manager"
+    : aiStatus?.source === "environment"
+      ? "Using OPENAI_API_KEY from the development environment"
+      : "No key configured";
+
+  async function submitApiKey(event) {
+    event.preventDefault();
+    if (!apiKey.trim() || credentialBusy) return;
+    const submitted = apiKey;
+    setApiKey("");
+    setCredentialBusy(true);
+    setCredentialMessage("Validating with OpenAI…");
+    try {
+      await onSaveApiKey(submitted);
+      setCredentialMessage("Validated and saved. The key is never stored in Luna's settings files.");
+    } catch (error) {
+      setCredentialMessage(String(error));
+    } finally {
+      setCredentialBusy(false);
+    }
+  }
+
+  async function removeSavedApiKey() {
+    if (credentialBusy) return;
+    setCredentialBusy(true);
+    setCredentialMessage("");
+    try {
+      await onRemoveApiKey();
+      setCredentialMessage("The saved Windows credential has been removed.");
+    } catch (error) {
+      setCredentialMessage(String(error));
+    } finally {
+      setCredentialBusy(false);
+    }
+  }
+
   return (
     <div className="feature-view narrow-feature">
       <FeatureHeader eyebrow="Settings" title="Private by default" description="Control where Luna scans and what metadata leaves your PC." />
@@ -247,8 +287,34 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
         <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Start with Windows</strong><small>Start hidden in the tray; the full window stays unloaded until you open it.</small></div><button className={`switch ${startupEnabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={startupEnabled} disabled={startupBusy} onClick={onStartupToggle}><i /></button></div>
         <div className="setting-row"><span className="setting-icon"><Settings24Regular /></span><div><strong>Share anonymous diagnostics</strong><small>Off by default. No file names or paths.</small></div><button className={`switch ${diagnostics ? "is-on" : ""}`} type="button" role="switch" aria-checked={diagnostics} onClick={() => setDiagnostics(!diagnostics)}><i /></button></div>
       </section>
+      <section className="feature-surface credential-card">
+        <div className="credential-heading">
+          <span className={`credential-state ${aiStatus?.configured ? "is-ready" : ""}`}><LockClosed24Regular /></span>
+          <div><h2>OpenAI connection</h2><p>{credentialSource} · {aiStatus?.model || "gpt-5.6-luna"}</p></div>
+        </div>
+        <form onSubmit={submitApiKey}>
+          <label htmlFor="openai-api-key">OpenAI API key</label>
+          <div className="credential-input-row">
+            <input
+              id="openai-api-key"
+              type="password"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder={aiStatus?.configured ? "Enter a new key to replace the current one" : "sk-…"}
+              autoComplete="new-password"
+              spellCheck="false"
+              disabled={credentialBusy}
+            />
+            <button className="primary-button" type="submit" disabled={!apiKey.trim() || credentialBusy}>{credentialBusy ? "Checking…" : aiStatus?.configured ? "Replace key" : "Save key"}</button>
+          </div>
+        </form>
+        <div className="credential-foot">
+          <small>{credentialMessage || "Luna validates the key in Rust, then stores it with your Windows account—not in the WebView or local JSON."}</small>
+          {aiStatus?.source === "windowsCredentialManager" && <button type="button" onClick={removeSavedApiKey} disabled={credentialBusy}>Remove saved key</button>}
+        </div>
+      </section>
       <section className="feature-surface privacy-details"><div><LockClosed24Regular /><h2>Scan metadata stays local</h2></div><p>Names, paths, sizes, timestamps, and duplicate hashes are processed by the Rust backend. AI reporting is a separate, explicit action and receives a minimized summary rather than file contents.</p><button className="primary-button" type="button" onClick={onScan}>Scan selected location <ArrowRight24Regular /></button></section>
-      <div className="model-note"><Sparkle24Regular /><span><strong>AI model</strong> GPT-5.6-Luna integration arrives in the next checkpoint.</span></div>
+      <div className="model-note"><Sparkle24Regular /><span><strong>AI privacy</strong> Reports send minimized aggregate scan totals only after you explicitly ask Luna to investigate.</span></div>
     </div>
   );
 }

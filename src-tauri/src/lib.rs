@@ -1,3 +1,4 @@
+mod ai;
 mod history;
 mod models;
 mod scanner;
@@ -67,6 +68,26 @@ fn app_status() -> AppStatus {
 #[tauri::command]
 fn list_scan_roots() -> Vec<ScanRootInfo> {
     scanner::list_scan_roots()
+}
+
+#[tauri::command]
+fn ai_status() -> ai::AiStatus {
+    ai::status()
+}
+
+#[tauri::command]
+async fn save_api_key(request: ai::SaveApiKeyRequest) -> Result<ai::AiStatus, String> {
+    ai::save_api_key(request).await
+}
+
+#[tauri::command]
+async fn delete_api_key() -> Result<ai::AiStatus, String> {
+    ai::delete_api_key().await
+}
+
+#[tauri::command]
+async fn generate_ai_report(request: ai::AiReportRequest) -> Result<ai::AiReportEnvelope, String> {
+    ai::investigate(request).await
 }
 
 #[tauri::command]
@@ -341,6 +362,10 @@ pub fn run() {
             clean_items,
             get_trend_history,
             clear_trend_history,
+            ai_status,
+            save_api_key,
+            delete_api_key,
+            generate_ai_report,
             get_schedule_status,
             update_schedule,
             capture_scheduled_snapshot

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0] - 2026-07-14
+
+### Added
+
+- GPT-5.6-Luna storage investigations using OpenAI's Responses API and strict structured reports.
+- Explicit report and follow-up actions that send only capped aggregate scan metadata, never file contents.
+- Masked OpenAI API key setup inside Settings with Rust-side validation before saving.
+- Secure per-user key storage in Windows Credential Manager, with the development environment retained as a fallback.
+- AI status reporting that identifies whether Luna is using a saved Windows credential or an environment key.
+- Native tests for report schema and API key input safeguards, plus an opt-in live API smoke test.
+
+### Changed
+
+- Windows Credential Manager now takes priority over `OPENAI_API_KEY` for normal app use.
+- The Trends storage story can be refreshed with an evidence-backed GPT-5.6 report.
+- Missing AI configuration now routes directly to Settings instead of leaving the user at a blocked report action.
+
 ## [0.4.0] - 2026-07-14
 
 ### Added

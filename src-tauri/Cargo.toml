@@ -1,6 +1,6 @@
 [package]
 name = "luna-clean"
-version = "0.4.0"
+version = "0.5.0"
 description = "A careful, AI-assisted Windows storage cleaner"
 authors = ["Luna Clean contributors"]
 edition = "2024"
@@ -17,6 +17,8 @@ blake3 = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 dotenvy = "0.15"
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.37"
@@ -25,3 +27,4 @@ tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["time"] }
 walkdir = "2"
+zeroize = "1"

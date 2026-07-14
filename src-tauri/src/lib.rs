@@ -3,6 +3,7 @@ mod history;
 mod models;
 mod scanner;
 mod schedule;
+mod settings;
 
 use models::{CleanupRequest, CleanupResult, ScanProgress, ScanResult, ScanRootInfo};
 use serde::Serialize;
@@ -57,12 +58,17 @@ struct ScheduledScanEvent {
 }
 
 #[tauri::command]
-fn app_status() -> AppStatus {
+fn app_status(app: AppHandle) -> AppStatus {
+    let default_scan_root = settings_file(&app)
+        .ok()
+        .and_then(|path| settings::load(&path).ok())
+        .and_then(|settings| settings.default_scan_root)
+        .or_else(|| scanner::default_scan_root().ok());
     AppStatus {
         name: "Luna Clean",
         version: env!("CARGO_PKG_VERSION"),
         backend_ready: true,
-        default_scan_root: scanner::default_scan_root().ok(),
+        default_scan_root,
     }
 }
 
@@ -140,6 +146,11 @@ fn update_schedule(
 }
 
 #[tauri::command]
+fn update_default_scan_root(app: AppHandle, root: String) -> Result<settings::AppSettings, String> {
+    settings::update_default_scan_root(&settings_file(&app)?, root)
+}
+
+#[tauri::command]
 fn capture_scheduled_snapshot(
     app: AppHandle,
     state: State<'_, RuntimeState>,
@@ -184,6 +195,10 @@ fn history_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 
 fn schedule_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(app_data_dir(app)?.join("schedule.json"))
+}
+
+fn settings_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app_data_dir(app)?.join("settings.json"))
 }
 
 fn perform_scan(app: &AppHandle, path: &str, emit_progress: bool) -> Result<ScanResult, String> {
@@ -388,6 +403,7 @@ pub fn run() {
             generate_ai_report,
             get_schedule_status,
             update_schedule,
+            update_default_scan_root,
             capture_scheduled_snapshot
         ])
         .build(tauri::generate_context!())

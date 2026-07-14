@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.2] - 2026-07-14
+
+### Fixed
+
+- Save and restore the default scan location after closing the window, quitting the tray app, or relaunching Luna Clean.
+
 ## [0.7.1] - 2026-07-14
 
 ### Fixed

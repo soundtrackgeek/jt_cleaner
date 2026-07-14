@@ -535,6 +535,19 @@ export function App() {
     }
   }
 
+  async function changeDefaultScanRoot(root) {
+    const previousRoot = selectedRoot;
+    setSelectedRoot(root);
+    if (!isTauri) return;
+    try {
+      await invoke("update_default_scan_root", { root });
+      setToast("Default scan location saved.");
+    } catch (error) {
+      setSelectedRoot(previousRoot);
+      setToast(`Default scan location unchanged: ${String(error)}`);
+    }
+  }
+
   async function changeSchedule(next) {
     if (!isTauri) {
       setScheduleStatus((current) => ({ ...current, ...next }));
@@ -762,7 +775,7 @@ export function App() {
       <SettingsView
         roots={scanRoots}
         selectedRoot={selectedRoot}
-        onRootChange={setSelectedRoot}
+        onRootChange={changeDefaultScanRoot}
         onScan={() => runScan()}
         onChooseFolder={chooseScanFolder}
         startupEnabled={startupEnabled}

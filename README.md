@@ -4,12 +4,13 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.7.1` makes live whole-drive scan progress match the completed result. While scanning a drive, Luna now shows Windows-reported used space and total capacity instead of a logical file-length sum that can overcount NTFS hard links.
+Version `0.7.2` saves the default scan location in Luna's local app settings. The selected home folder or drive is restored after closing the window, quitting the tray app, or installing an update.
 
 ### Included
 
 - Responsive Windows 11 Fluent-style cleanup review plus Overview, Scan results, Trends, Storage explorer, Duplicates, Large files, Schedule, and Settings surfaces.
 - Folder and drive discovery with native directory selection.
+- A persistent default scan location that is restored whenever the interface opens.
 - Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
 - Top-level storage aggregation, large-file ranking, and activity-age buckets.
 - Windows-reported used space and total capacity for whole-drive scan summaries and trend snapshots.
@@ -59,7 +60,7 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 
 1. Run `npm run tauri dev`.
 2. Open **Scan results**, **Storage explorer**, **Duplicates**, or **Large files**.
-3. Choose the default home folder, a detected drive, or **Choose folder** for a custom location.
+3. Choose the default home folder or a detected drive in **Settings**; Luna remembers that default across restarts. Use **Choose folder** for a one-time custom location.
 4. Start the scan and keep the app open while Luna reports progress.
 5. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files and old Downloads are never selected automatically.
 6. Open **Trends** after the scan to compare the current snapshot with earlier scans. Capturing from Trends shows progress in place, and a second scan on the same day refreshes that day instead of adding noise.

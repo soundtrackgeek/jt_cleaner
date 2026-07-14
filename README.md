@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.3.0` adds a compact storage-history engine and the selected **Storage composition over time** experience. Every completed scan now captures a tiny aggregate snapshot so Luna can show what is growing, shrinking, and aging without storing a second file inventory.
+Version `0.4.0` adds native Windows tray operation, opt-in startup with Windows, and automatic snapshot scheduling. Hidden startup creates no WebView; Luna keeps a small Rust tray process available and constructs the full interface only when you open it.
 
 ### Included
 
@@ -19,6 +19,11 @@ Version `0.3.0` adds a compact storage-history engine and the selected **Storage
 - Storage composition over time with a stacked category chart, fastest-mover ranking, age-cohort heatmap, and a local narrative summary.
 - Per-drive aggregate snapshots containing category totals, age buckets, cleanup signals, and duplicate opportunity—never file contents or a duplicate inventory.
 - Same-day snapshot replacement and a 104-snapshot cap per drive, covering roughly two years of weekly history.
+- Native system tray with **Open Luna Clean**, **Capture storage snapshot**, and **Quit Luna Clean** actions.
+- Optional startup with Windows using a hidden `--hidden` launch path.
+- Daily, weekly, or monthly background snapshot scheduling with weekly as the default.
+- A single-scan guard shared by foreground and scheduled scans.
+- Close-to-tray behavior that destroys the WebView instead of keeping the full interface hidden in memory.
 - Native Tauri 2 shell and NSIS bundle configuration.
 
 ## Prerequisites
@@ -47,6 +52,12 @@ Set `OPENAI_API_KEY` in `.env` for the upcoming AI reporting stage. `.env` is ig
 5. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files and old Downloads are never selected automatically.
 6. Open **Trends** after the scan to compare the current snapshot with earlier scans. A second scan on the same day refreshes that day instead of adding noise.
 
+## Tray and scheduled snapshots
+
+Open **Schedule** to enable a daily, weekly, or monthly aggregate snapshot and choose its scan location. Scheduled scans never clean files. If a scan fails, Luna records the error and waits six hours before retrying rather than looping aggressively.
+
+Open **Settings** to enable **Start with Windows**. Luna then starts hidden in the tray, checks whether a snapshot is due, and keeps the full WebView unloaded until you open the app. Closing the main window returns to that lightweight tray-only state; use **Quit Luna Clean** from the tray to exit completely.
+
 Large drive scans may encounter protected Windows folders. Luna skips unreadable entries, reports bounded warnings, does not follow symbolic links, and excludes common high-churn developer folders such as `.git` and `node_modules`. Duplicate analysis is capped at 20,000 files of at least 1 MB so large scans remain bounded; storage totals are not capped.
 
 ## Commands
@@ -65,5 +76,4 @@ Luna Clean distinguishes rebuildable caches from personal data, defaults review-
 
 ## Planned next stages
 
-- Automatic weekly capture through a low-idle-memory system tray with optional Windows startup.
 - GPT-5.6-Luna investigation reports and evidence-backed follow-up questions.

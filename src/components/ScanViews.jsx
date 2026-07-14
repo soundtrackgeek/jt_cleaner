@@ -216,22 +216,26 @@ export function LargeFilesView({ result, scanning, progress, onScan, onChooseFol
   );
 }
 
-export function ScheduleView() {
-  const [enabled, setEnabled] = useState(false);
-  const [frequency, setFrequency] = useState("Weekly");
+export function ScheduleView({ schedule, roots, selectedRoot, onScheduleChange, onCapture }) {
+  const enabled = schedule?.enabled || false;
+  const frequency = schedule?.frequency || "Weekly";
+  const scheduleRoot = schedule?.scanRoot || selectedRoot || roots[0]?.path || "";
+  const busy = schedule?.isScanning || false;
   return (
     <div className="feature-view narrow-feature">
-      <FeatureHeader eyebrow="Schedule" title="A quiet storage check-in" description="Configure the experience now. Native Windows scheduling is planned for a later release and will require an explicit permission step." />
+      <FeatureHeader eyebrow="Schedule" title="A quiet storage check-in" description="Capture a compact snapshot on your preferred cadence. Luna can scan from the tray without keeping the full interface in memory." action={<button className="secondary-button" type="button" disabled={busy} onClick={onCapture}><ArrowSync24Regular /> {busy ? "Capturing…" : "Capture now"}</button>} />
       <section className="feature-surface settings-list">
-        <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Scheduled scan</strong><small>Prepare a local scan on your preferred cadence.</small></div><button className={`switch ${enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={enabled} onClick={() => setEnabled(!enabled)}><i /></button></div>
-        <div className="setting-row"><span className="setting-icon"><ArrowSync24Regular /></span><div><strong>Frequency</strong><small>No automatic cleanup—reports only.</small></div><select value={frequency} onChange={(event) => setFrequency(event.target.value)} disabled={!enabled}><option>Daily</option><option>Weekly</option><option>Monthly</option></select></div>
+        <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Scheduled snapshots</strong><small>{enabled ? (schedule?.nextRunAt ? `Next capture ${formatDateTime(schedule.nextRunAt)}` : `${frequency} snapshots enabled.`) : "Off until you choose to enable it."}</small></div><button className={`switch ${enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={enabled} onClick={() => onScheduleChange({ enabled: !enabled, frequency, scanRoot: scheduleRoot })}><i /></button></div>
+        <div className="setting-row"><span className="setting-icon"><ArrowSync24Regular /></span><div><strong>Frequency</strong><small>No automatic cleanup—snapshots and reports only.</small></div><select value={frequency} onChange={(event) => onScheduleChange({ enabled, frequency: event.target.value, scanRoot: scheduleRoot })} disabled={!enabled}><option>Daily</option><option>Weekly</option><option>Monthly</option></select></div>
+        <div className="setting-row"><span className="setting-icon"><HardDrive24Regular /></span><div><strong>Scan location</strong><small>{scheduleRoot || "Choose a location in Settings"}</small></div><select value={scheduleRoot} onChange={(event) => onScheduleChange({ enabled, frequency, scanRoot: event.target.value })} disabled={!enabled}>{roots.map((entry) => <option key={entry.id} value={entry.path}>{entry.name}</option>)}</select></div>
       </section>
-      <div className="privacy-callout"><ShieldCheckmark24Regular /><div><strong>Scheduled cleanup stays off</strong><p>Luna will never remove files in the background. Cleanup always comes back to the review screen for confirmation.</p></div></div>
+      <div className="privacy-callout"><ShieldCheckmark24Regular /><div><strong>Scheduled cleanup stays off</strong><p>Luna never removes files in the background. Closing the window releases its WebView; the small Rust tray process stays available for your next due snapshot.</p></div></div>
+      {schedule?.lastError && <div className="scan-error"><Warning24Regular /><span>{schedule.lastError}</span></div>}
     </div>
   );
 }
 
-export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder }) {
+export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder, startupEnabled, startupBusy, onStartupToggle }) {
   const [diagnostics, setDiagnostics] = useState(false);
   const root = useMemo(() => roots.find((entry) => entry.path === selectedRoot), [roots, selectedRoot]);
   return (
@@ -240,6 +244,7 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
       <section className="feature-surface settings-list">
         <div className="setting-row"><span className="setting-icon"><HardDrive24Regular /></span><div><strong>Default scan location</strong><small>{root?.path || selectedRoot || "Home folder"}</small></div><select value={selectedRoot} onChange={(event) => onRootChange(event.target.value)}>{roots.map((entry) => <option key={entry.id} value={entry.path}>{entry.name}</option>)}</select></div>
         <div className="setting-row"><span className="setting-icon"><Folder24Regular /></span><div><strong>Custom folder</strong><small>Choose any accessible folder for a one-time scan.</small></div><button className="secondary-button" type="button" onClick={onChooseFolder}>Choose</button></div>
+        <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Start with Windows</strong><small>Start hidden in the tray; the full window stays unloaded until you open it.</small></div><button className={`switch ${startupEnabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={startupEnabled} disabled={startupBusy} onClick={onStartupToggle}><i /></button></div>
         <div className="setting-row"><span className="setting-icon"><Settings24Regular /></span><div><strong>Share anonymous diagnostics</strong><small>Off by default. No file names or paths.</small></div><button className={`switch ${diagnostics ? "is-on" : ""}`} type="button" role="switch" aria-checked={diagnostics} onClick={() => setDiagnostics(!diagnostics)}><i /></button></div>
       </section>
       <section className="feature-surface privacy-details"><div><LockClosed24Regular /><h2>Scan metadata stays local</h2></div><p>Names, paths, sizes, timestamps, and duplicate hashes are processed by the Rust backend. AI reporting is a separate, explicit action and receives a minimized summary rather than file contents.</p><button className="primary-button" type="button" onClick={onScan}>Scan selected location <ArrowRight24Regular /></button></section>
@@ -247,4 +252,3 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
     </div>
   );
 }
-

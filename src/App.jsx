@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowSync24Regular,
@@ -318,7 +319,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.2.0");
+  const [appVersion, setAppVersion] = useState("0.4.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -326,6 +327,9 @@ export function App() {
   const [scanError, setScanError] = useState("");
   const [scanning, setScanning] = useState(false);
   const [trendHistory, setTrendHistory] = useState(null);
+  const [scheduleStatus, setScheduleStatus] = useState({ enabled: false, frequency: "Weekly", scanRoot: "", isScanning: false });
+  const [startupEnabled, setStartupEnabled] = useState(false);
+  const [startupBusy, setStartupBusy] = useState(false);
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
   const selectedSize = useMemo(
@@ -344,11 +348,13 @@ export function App() {
   useEffect(() => {
     if (!isTauri) return;
     setTrendHistory(null);
-    Promise.all([invoke("app_status"), invoke("list_scan_roots")])
-      .then(([status, roots]) => {
+    Promise.all([invoke("app_status"), invoke("list_scan_roots"), invoke("get_schedule_status"), isAutostartEnabled()])
+      .then(([status, roots, schedule, autostart]) => {
         setAppVersion(status.version);
         setScanRoots(roots);
         setSelectedRoot(status.defaultScanRoot || roots[0]?.path || "");
+        setScheduleStatus(schedule);
+        setStartupEnabled(autostart);
       })
       .catch(() => undefined);
   }, [isTauri]);
@@ -362,12 +368,38 @@ export function App() {
 
   useEffect(() => {
     if (!isTauri) return undefined;
-    let stopListening;
-    listen("scan-progress", (event) => setScanProgress(event.payload)).then((unlisten) => {
-      stopListening = unlisten;
+    let stopListening = [];
+    let disposed = false;
+    Promise.all([
+      listen("scan-progress", (event) => setScanProgress(event.payload)),
+      listen("scheduled-scan-started", () => {
+        setScheduleStatus((current) => ({ ...current, isScanning: true, lastError: null }));
+        setToast("Luna is capturing a storage snapshot quietly in the background.");
+      }),
+      listen("scheduled-scan-complete", async (event) => {
+        setScheduleStatus((current) => ({ ...current, isScanning: false, lastRunAt: event.payload.scannedAt }));
+        setToast(`Snapshot captured — ${formatBytes(event.payload.totalBytes)} measured.`);
+        invoke("get_schedule_status").then(setScheduleStatus).catch(() => undefined);
+        if (event.payload.root === selectedRoot) {
+          invoke("get_trend_history", { root: selectedRoot }).then(setTrendHistory).catch(() => undefined);
+        }
+      }),
+      listen("scheduled-scan-error", (event) => {
+        setScheduleStatus((current) => ({ ...current, isScanning: false, lastError: String(event.payload) }));
+        setToast(`Scheduled snapshot stopped: ${String(event.payload)}`);
+      }),
+    ]).then((unlisteners) => {
+      if (disposed) {
+        unlisteners.forEach((unlisten) => unlisten());
+      } else {
+        stopListening = unlisteners;
+      }
     });
-    return () => stopListening?.();
-  }, [isTauri]);
+    return () => {
+      disposed = true;
+      stopListening.forEach((unlisten) => unlisten());
+    };
+  }, [isTauri, selectedRoot]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -427,6 +459,53 @@ export function App() {
     }
   }
 
+  async function changeSchedule(next) {
+    if (!isTauri) {
+      setScheduleStatus((current) => ({ ...current, ...next }));
+      setToast("Native scheduling is available in the Tauri app.");
+      return;
+    }
+    try {
+      const updated = await invoke("update_schedule", { request: next });
+      setScheduleStatus(updated);
+      setToast(updated.enabled ? `${updated.frequency} snapshots are scheduled.` : "Scheduled snapshots are off.");
+    } catch (error) {
+      setToast(`Schedule unchanged: ${String(error)}`);
+    }
+  }
+
+  async function captureScheduledSnapshot() {
+    if (!isTauri) {
+      setToast("Background snapshots are available in the native Tauri app.");
+      return;
+    }
+    try {
+      await invoke("capture_scheduled_snapshot");
+      setScheduleStatus((current) => ({ ...current, isScanning: true }));
+    } catch (error) {
+      setToast(String(error));
+    }
+  }
+
+  async function toggleStartup() {
+    if (!isTauri || startupBusy) return;
+    setStartupBusy(true);
+    try {
+      if (startupEnabled) {
+        await disableAutostart();
+      } else {
+        await enableAutostart();
+      }
+      const enabled = await isAutostartEnabled();
+      setStartupEnabled(enabled);
+      setToast(enabled ? "Luna will start quietly in the tray with Windows." : "Windows startup is off.");
+    } catch (error) {
+      setToast(`Startup setting unchanged: ${String(error)}`);
+    } finally {
+      setStartupBusy(false);
+    }
+  }
+
   async function completeCleanup() {
     const count = selectedItems.length;
     const size = selectedSize;
@@ -476,7 +555,15 @@ export function App() {
     storage: <StorageView {...viewProps} />,
     duplicates: <DuplicatesView {...viewProps} />,
     large: <LargeFilesView {...viewProps} />,
-    schedule: <ScheduleView />,
+    schedule: (
+      <ScheduleView
+        schedule={scheduleStatus}
+        roots={scanRoots}
+        selectedRoot={selectedRoot}
+        onScheduleChange={changeSchedule}
+        onCapture={captureScheduledSnapshot}
+      />
+    ),
     settings: (
       <SettingsView
         roots={scanRoots}
@@ -484,6 +571,9 @@ export function App() {
         onRootChange={setSelectedRoot}
         onScan={() => runScan()}
         onChooseFolder={chooseScanFolder}
+        startupEnabled={startupEnabled}
+        startupBusy={startupBusy}
+        onStartupToggle={toggleStartup}
       />
     ),
   };

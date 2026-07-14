@@ -3,6 +3,11 @@
   "identifier": "default",
   "description": "Default permissions for the Luna Clean desktop window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
+  ]
 }
-

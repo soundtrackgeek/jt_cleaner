@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0] - 2026-07-14
+
+### Added
+
+- Native Windows tray menu for opening Luna Clean, capturing a snapshot, and quitting completely.
+- Optional startup with Windows through the Tauri autostart plugin.
+- Persisted daily, weekly, or monthly snapshot scheduling with weekly as the default.
+- Background snapshot events and retry metadata for the Schedule interface.
+- A shared single-scan guard that prevents foreground and scheduled scans from overlapping.
+- Rust tests for disabled and immediately due schedule states.
+
+### Changed
+
+- The main WebView is now created on demand and destroyed when its window closes, leaving the smaller Rust tray process running.
+- Hidden startup no longer creates the main WebView, reducing measured debug-build tray idle memory to roughly 3 MB private memory on the development machine.
+- Scheduled scans capture reports and trends only; cleanup always requires the foreground confirmation flow.
+
 ## [0.3.0] - 2026-07-14
 
 ### Added

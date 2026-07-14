@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -10,6 +10,7 @@ import {
   ChevronDown20Regular,
   ChevronRight20Regular,
   Clock24Regular,
+  DataTrending24Regular,
   Delete24Regular,
   Dismiss24Regular,
   Document24Regular,
@@ -37,10 +38,13 @@ import {
 } from "./components/ScanViews.jsx";
 import { formatBytes, formatDateTime } from "./lib/format.js";
 
+const TrendsView = lazy(() => import("./components/TrendsView.jsx").then((module) => ({ default: module.TrendsView })));
+
 const navigation = [
   { id: "overview", label: "Overview", icon: Home24Regular },
   { id: "scan", label: "Scan results", icon: ScanCamera24Regular },
   { id: "cleanup", label: "Cleanup review", icon: CheckmarkCircle24Regular },
+  { id: "trends", label: "Trends", icon: DataTrending24Regular },
   { id: "storage", label: "Storage explorer", icon: Folder24Regular },
   { id: "duplicates", label: "Duplicates", icon: DocumentCopy24Regular },
   { id: "large", label: "Large files", icon: Document24Regular },
@@ -321,6 +325,7 @@ export function App() {
   const [scanProgress, setScanProgress] = useState(null);
   const [scanError, setScanError] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [trendHistory, setTrendHistory] = useState(null);
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
   const selectedSize = useMemo(
@@ -338,6 +343,7 @@ export function App() {
 
   useEffect(() => {
     if (!isTauri) return;
+    setTrendHistory(null);
     Promise.all([invoke("app_status"), invoke("list_scan_roots")])
       .then(([status, roots]) => {
         setAppVersion(status.version);
@@ -346,6 +352,13 @@ export function App() {
       })
       .catch(() => undefined);
   }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri || !selectedRoot) return;
+    invoke("get_trend_history", { root: selectedRoot })
+      .then(setTrendHistory)
+      .catch(() => setTrendHistory(null));
+  }, [isTauri, selectedRoot]);
 
   useEffect(() => {
     if (!isTauri) return undefined;
@@ -385,6 +398,8 @@ export function App() {
       setScanResult(result);
       setSelectedRoot(path);
       setItems(result.cleanupItems.map(mapCleanupItem));
+      const history = await invoke("get_trend_history", { root: path });
+      setTrendHistory(history);
       setExpandedId(result.cleanupItems.find((item) => item.sizeBytes > 0)?.id || "");
       setToast(`Scan complete — ${formatBytes(result.totalBytes)} across ${result.fileCount.toLocaleString()} files.`);
     } catch (error) {
@@ -510,7 +525,7 @@ export function App() {
   const ageMaximum = scanResult ? Math.max(...ageChartEntries.map((entry) => entry[3]), 1) : 100;
 
   return (
-    <div className={`app-shell ${activeNav !== "cleanup" ? "without-findings" : ""}`}>
+    <div className={`app-shell ${!["cleanup", "trends"].includes(activeNav) ? "without-findings" : ""}`}>
       <aside className="sidebar">
         <div className="brand-lockup">
           <img src={lunaMark} alt="" />
@@ -546,7 +561,15 @@ export function App() {
         <span className="scan-stamp">{scanResult ? `Scanned ${formatDateTime(scanResult.scannedAt)}` : "Ready for a local scan"}<br />v{appVersion}</span>
       </aside>
 
-      {activeNav !== "cleanup" ? (
+      {activeNav === "trends" ? (
+        <Suspense fallback={<main className="trends-workspace trend-empty-workspace"><div className="trend-loading">Drawing your storage story…</div></main>}>
+          <TrendsView
+            history={trendHistory}
+            onCapture={() => runScan()}
+            onAsk={() => setToast("Luna’s GPT-5.6 trend report connection is next in the build queue.")}
+          />
+        </Suspense>
+      ) : activeNav !== "cleanup" ? (
         <main className="feature-workspace">{featureViews[activeNav]}</main>
       ) : (
       <>

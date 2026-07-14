@@ -1,9 +1,10 @@
+mod history;
 mod models;
 mod scanner;
 
 use models::{CleanupRequest, CleanupResult, ScanProgress, ScanResult, ScanRootInfo};
 use serde::Serialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,12 +33,42 @@ fn list_scan_roots() -> Vec<ScanRootInfo> {
 #[tauri::command]
 async fn scan_path(app: tauri::AppHandle, path: String) -> Result<ScanResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        scanner::scan_path(&path, |progress: ScanProgress| {
+        let result = scanner::scan_path(&path, |progress: ScanProgress| {
             let _ = app.emit("scan-progress", progress);
-        })
+        })?;
+        let history_path = history::history_path(
+            &app.path()
+                .app_data_dir()
+                .map_err(|error| format!("Luna could not locate its data folder: {error}"))?,
+        );
+        history::save_snapshot(&history_path, &result)?;
+        Ok(result)
     })
     .await
     .map_err(|error| format!("The scan worker stopped unexpectedly: {error}"))?
+}
+
+#[tauri::command]
+fn get_trend_history(app: tauri::AppHandle, root: String) -> Result<history::TrendHistory, String> {
+    let path = history::history_path(
+        &app.path()
+            .app_data_dir()
+            .map_err(|error| format!("Luna could not locate its data folder: {error}"))?,
+    );
+    history::load_history(&path, &root)
+}
+
+#[tauri::command]
+fn clear_trend_history(
+    app: tauri::AppHandle,
+    root: String,
+) -> Result<history::TrendHistory, String> {
+    let path = history::history_path(
+        &app.path()
+            .app_data_dir()
+            .map_err(|error| format!("Luna could not locate its data folder: {error}"))?,
+    );
+    history::clear_history(&path, &root)
 }
 
 #[tauri::command]
@@ -56,7 +87,9 @@ pub fn run() {
             app_status,
             list_scan_roots,
             scan_path,
-            clean_items
+            clean_items,
+            get_trend_history,
+            clear_trend_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running Luna Clean");

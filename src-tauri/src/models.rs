@@ -19,7 +19,7 @@ pub struct ScanProgress {
     pub current_path: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgeBuckets {
     pub recent_bytes: u64,

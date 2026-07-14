@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0] - 2026-07-14
+
+### Added
+
+- Compact per-drive storage snapshots derived from completed scan aggregates.
+- Storage composition over time using a stacked category chart with exact-value hover details.
+- Fastest-mover rankings and an age-cohort heatmap across the retained history.
+- Local storage-story insights for total growth, the fastest category, older storage, and duplicate opportunity.
+- Rust commands to load and clear history for a selected root.
+- Rust tests for same-day replacement and the two-year weekly retention cap.
+
+### Changed
+
+- Repeated scans on the same calendar day now refresh one snapshot instead of creating duplicates.
+- Trend history is capped at 104 entries per root and retains only compact totals, not full file inventories.
+- Trend charts load on demand so the standard cleanup experience avoids their frontend cost.
+
 ## [0.2.0] - 2026-07-14
 
 ### Added

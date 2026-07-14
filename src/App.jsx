@@ -37,7 +37,7 @@ import {
   SettingsView,
   StorageView,
 } from "./components/ScanViews.jsx";
-import { formatBytes, formatDateTime } from "./lib/format.js";
+import { formatBytes, formatDateTime, formatScanSize, getScanUsage } from "./lib/format.js";
 
 const TrendsView = lazy(() => import("./components/TrendsView.jsx").then((module) => ({ default: module.TrendsView })));
 
@@ -184,7 +184,7 @@ const previewAiReport = {
 
 function buildReportContext(scanResult, trendHistory, cleanupItems) {
   const latest = trendHistory?.snapshots?.at(-1);
-  const totalBytes = scanResult?.totalBytes ?? latest?.totalBytes ?? Math.round(cleanupItems.reduce((sum, item) => sum + item.size, 0) * 1024 ** 3);
+  const totalBytes = scanResult ? getScanUsage(scanResult).usedBytes : latest?.totalBytes ?? Math.round(cleanupItems.reduce((sum, item) => sum + item.size, 0) * 1024 ** 3);
   const ageBuckets = scanResult?.ageBuckets || latest?.ageBuckets || {
     recentBytes: Math.round(0.6 * 1024 ** 3),
     inactive30To90Bytes: Math.round(2.1 * 1024 ** 3),
@@ -509,7 +509,7 @@ export function App() {
       setTrendHistory(history);
       setAiReport(null);
       setExpandedId(result.cleanupItems.find((item) => item.sizeBytes > 0)?.id || "");
-      setToast(`Scan complete — ${formatBytes(result.totalBytes)} across ${result.fileCount.toLocaleString()} files.`);
+      setToast(`Scan complete — ${formatScanSize(result)} across ${result.fileCount.toLocaleString()} files.`);
     } catch (error) {
       setScanError(String(error));
       setToast(`Scan stopped: ${String(error)}`);

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2] - 2026-07-14
+
+### Fixed
+
+- Whole-drive scans now show Windows-reported used space and total capacity instead of presenting the logical sum of file lengths, which can exceed an NTFS volume's capacity when hard-linked files appear through multiple paths.
+- Drive trend snapshots, scheduled-scan notifications, and AI report totals now use the same Windows-reported used-space measurement.
+
 ## [0.6.1] - 2026-07-14
 
 ### Fixed

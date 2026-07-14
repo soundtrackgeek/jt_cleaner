@@ -131,7 +131,7 @@ fn snapshot_from_scan(result: &ScanResult) -> StorageSnapshot {
 
     StorageSnapshot {
         captured_at: result.scanned_at.clone(),
-        total_bytes: result.total_bytes,
+        total_bytes: result.reported_used_bytes(),
         file_count: result.file_count,
         folder_count: result.folder_count,
         categories,

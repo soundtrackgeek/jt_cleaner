@@ -234,11 +234,12 @@ async fn background_scan(app: AppHandle, flag: Arc<AtomicBool>, force: bool) {
 
     match outcome {
         Ok(Ok(result)) => {
+            let total_bytes = result.reported_used_bytes();
             let _ = app.emit(
                 "scheduled-scan-complete",
                 ScheduledScanEvent {
                     root: result.root,
-                    total_bytes: result.total_bytes,
+                    total_bytes,
                     scanned_at: result.scanned_at,
                 },
             );

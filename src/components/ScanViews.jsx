@@ -16,7 +16,7 @@ import {
   Sparkle24Regular,
   Warning24Regular,
 } from "@fluentui/react-icons";
-import { formatBytes, formatCount, formatDateTime, formatDuration } from "../lib/format.js";
+import { formatBytes, formatCount, formatDateTime, formatDuration, formatScanSize, getScanUsage } from "../lib/format.js";
 
 function EmptyScan({ onScan, onChooseFolder }) {
   return (
@@ -113,6 +113,7 @@ export function OverviewView({ result, scanning, progress, onScan, onChooseFolde
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
   const reclaimable = result.cleanupItems.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const scanUsage = getScanUsage(result);
   return (
     <div className="feature-view">
       <FeatureHeader
@@ -122,7 +123,7 @@ export function OverviewView({ result, scanning, progress, onScan, onChooseFolde
         action={<button className="primary-button" type="button" onClick={onScan}><ArrowSync24Regular /> Scan again</button>}
       />
       <section className="summary-strip">
-        <div><span>Scanned data</span><strong>{formatBytes(result.totalBytes)}</strong><small>{formatCount(result.folderCount)} folders</small></div>
+        <div><span>{scanUsage.isDrive ? "Windows drive usage" : "Scanned data"}</span><strong>{formatBytes(scanUsage.usedBytes)}</strong><small>{scanUsage.isDrive ? `${formatBytes(scanUsage.totalBytes)} total` : `${formatCount(result.folderCount)} folders`}</small></div>
         <div><span>Potential review</span><strong>{formatBytes(reclaimable)}</strong><small>{result.cleanupItems.length} cleanup signals</small></div>
         <div><span>Exact duplicates</span><strong>{result.duplicateGroups.length}</strong><small>Content-hash groups</small></div>
         <div><span>Scan time</span><strong>{formatDuration(result.durationMs)}</strong><small>{formatDateTime(result.scannedAt)}</small></div>
@@ -146,7 +147,7 @@ export function ScanResultsView({ result, scanning, progress, error, onScan, onC
       {error && <div className="inline-error"><Warning24Regular />{error}</div>}
       {!result ? <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} /> : (
         <>
-          <section className="scan-summary-line"><CheckmarkCircle24Regular /><div><strong>Completed in {formatDuration(result.durationMs)}</strong><span>{formatCount(result.fileCount)} files · {formatBytes(result.totalBytes)} · {result.warnings.length} warnings</span></div><time>{formatDateTime(result.scannedAt)}</time></section>
+          <section className="scan-summary-line"><CheckmarkCircle24Regular /><div><strong>Completed in {formatDuration(result.durationMs)}</strong><span>{formatCount(result.fileCount)} files · {formatScanSize(result)} · {result.warnings.length} warnings</span></div><time>{formatDateTime(result.scannedAt)}</time></section>
           <CategoryTable result={result} limit={24} />
           {result.warnings.length > 0 && <section className="feature-surface warning-list"><h2>Skipped safely</h2>{result.warnings.map((warning) => <p key={warning}><Warning24Regular />{warning}</p>)}</section>}
         </>
@@ -169,7 +170,7 @@ export function StorageView({ result, scanning, progress, onScan, onChooseFolder
         action={<button className="secondary-button" type="button" onClick={onChooseFolder}><Folder24Regular /> Choose another folder</button>}
       />
       <section className="feature-surface storage-map">
-        <div className="surface-heading"><div><h2>Storage map</h2><p>Area is proportional to the folder’s scanned size.</p></div><strong>{formatBytes(result.totalBytes)}</strong></div>
+        <div className="surface-heading"><div><h2>Storage map</h2><p>Area is proportional to the folder’s scanned size.</p></div><strong>{formatScanSize(result)}</strong></div>
         <div className="treemap" role="img" aria-label="Proportional storage map">
           {displayed.map((category, index) => (
             <div className={`treemap-node treemap-tone-${index % 5}`} key={category.path} style={{ flexGrow: Math.max(category.sizeBytes / total, 0.025), flexBasis: `${Math.max((category.sizeBytes / total) * 100, 8)}%` }}>

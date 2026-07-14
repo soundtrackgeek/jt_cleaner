@@ -51,6 +51,18 @@ struct CacheTarget {
     path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VolumeSpace {
+    total_bytes: u64,
+    available_bytes: u64,
+}
+
+impl VolumeSpace {
+    fn used_bytes(self) -> u64 {
+        self.total_bytes.saturating_sub(self.available_bytes)
+    }
+}
+
 pub fn default_scan_root() -> Result<String, String> {
     dirs::home_dir()
         .map(|path| path.to_string_lossy().to_string())
@@ -96,6 +108,49 @@ pub fn list_scan_roots() -> Vec<ScanRootInfo> {
     }
 
     roots
+}
+
+fn volume_space_for_root(root: &Path) -> Option<VolumeSpace> {
+    let disks = Disks::new_with_refreshed_list();
+    volume_space_from_mounts(
+        root,
+        disks.iter().map(|disk| {
+            (
+                disk.mount_point(),
+                disk.total_space(),
+                disk.available_space(),
+            )
+        }),
+    )
+}
+
+fn volume_space_from_mounts<'a>(
+    root: &Path,
+    mounts: impl IntoIterator<Item = (&'a Path, u64, u64)>,
+) -> Option<VolumeSpace> {
+    mounts
+        .into_iter()
+        .find(|(mount, _, _)| paths_refer_to_same_location(root, mount))
+        .map(|(_, total_bytes, available_bytes)| VolumeSpace {
+            total_bytes,
+            available_bytes,
+        })
+}
+
+fn paths_refer_to_same_location(left: &Path, right: &Path) -> bool {
+    let left = fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
 }
 
 pub fn scan_path<F>(requested_path: &str, mut on_progress: F) -> Result<ScanResult, String>
@@ -256,10 +311,14 @@ where
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| root.to_string_lossy().to_string());
 
+    let volume_space = volume_space_for_root(&root);
+
     Ok(ScanResult {
         root: root.to_string_lossy().to_string(),
         root_name,
         total_bytes,
+        drive_total_bytes: volume_space.map(|space| space.total_bytes),
+        drive_used_bytes: volume_space.map(VolumeSpace::used_bytes),
         file_count,
         folder_count,
         categories,
@@ -961,5 +1020,35 @@ mod tests {
         let result = clean_items(&["old-downloads".to_string(), "arbitrary-path".to_string()]);
         assert_eq!(result.removed_files, 0);
         assert_eq!(result.skipped.len(), 2);
+    }
+
+    #[test]
+    fn whole_drive_usage_comes_from_the_matching_volume() {
+        let root = env::current_dir().expect("current directory");
+        let canonical_root = fs::canonicalize(&root).expect("canonical current directory");
+        let mounts = [(canonical_root.as_path(), 500, 125)];
+
+        let space = volume_space_from_mounts(&root, mounts).expect("matching volume");
+
+        assert_eq!(space.total_bytes, 500);
+        assert_eq!(space.used_bytes(), 375);
+        assert_eq!(
+            volume_space_from_mounts(Path::new("definitely-not-the-root"), mounts),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn canonical_windows_drive_root_matches_reported_volume() {
+        let drive = list_scan_roots()
+            .into_iter()
+            .find(|root| root.total_bytes > 0)
+            .expect("a Windows drive");
+        let canonical_root = fs::canonicalize(&drive.path).expect("canonical drive root");
+
+        let space = volume_space_for_root(&canonical_root).expect("matching Windows volume");
+
+        assert_eq!(space.total_bytes, drive.total_bytes);
     }
 }

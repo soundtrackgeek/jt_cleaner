@@ -91,6 +91,8 @@ pub struct ScanResult {
     pub root: String,
     pub root_name: String,
     pub total_bytes: u64,
+    pub drive_total_bytes: Option<u64>,
+    pub drive_used_bytes: Option<u64>,
     pub file_count: u64,
     pub folder_count: u64,
     pub categories: Vec<StorageCategory>,
@@ -101,6 +103,12 @@ pub struct ScanResult {
     pub scanned_at: String,
     pub duration_ms: u128,
     pub warnings: Vec<String>,
+}
+
+impl ScanResult {
+    pub fn reported_used_bytes(&self) -> u64 {
+        self.drive_used_bytes.unwrap_or(self.total_bytes)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

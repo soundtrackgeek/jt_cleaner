@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.6.1` adds signed Windows updates and a GitHub Actions release pipeline. Every push to `master` is tested, built as a signed NSIS installer, published as a versioned GitHub Release, and exposed through the app's signed update channel. The updater restart path is explicitly exempted from Luna's close-to-tray guard and covered by a native regression test.
+Version `0.6.2` makes whole-drive scan totals match Windows. Drive results now show used space together with total capacity from the live Windows volume measurement, avoiding logical file-size overcounts caused by NTFS hard links.
 
 ### Included
 
@@ -12,6 +12,7 @@ Version `0.6.1` adds signed Windows updates and a GitHub Actions release pipelin
 - Folder and drive discovery with native directory selection.
 - Streaming scan progress from the Rust worker.
 - Top-level storage aggregation, large-file ranking, and activity-age buckets.
+- Windows-reported used space and total capacity for whole-drive scan summaries and trend snapshots.
 - Exact duplicate detection using size grouping followed by BLAKE3 content hashes.
 - Browser, Codex, and Windows temporary-cache discovery.
 - Safe versus review-required cleanup grouping, expandable evidence, and confirmation.

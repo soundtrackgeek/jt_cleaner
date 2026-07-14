@@ -8,6 +8,26 @@ export function formatBytes(bytes = 0, maximumFractionDigits = 1) {
   })} ${units[unitIndex]}`;
 }
 
+export function getScanUsage(result) {
+  const driveTotalBytes = result?.driveTotalBytes;
+  const driveUsedBytes = result?.driveUsedBytes;
+  if (Number.isFinite(driveTotalBytes) && driveTotalBytes > 0 && Number.isFinite(driveUsedBytes)) {
+    return {
+      usedBytes: Math.min(Math.max(driveUsedBytes, 0), driveTotalBytes),
+      totalBytes: driveTotalBytes,
+      isDrive: true,
+    };
+  }
+  return { usedBytes: result?.totalBytes || 0, totalBytes: null, isDrive: false };
+}
+
+export function formatScanSize(result) {
+  const usage = getScanUsage(result);
+  return usage.isDrive
+    ? `${formatBytes(usage.usedBytes)} used of ${formatBytes(usage.totalBytes)}`
+    : formatBytes(usage.usedBytes);
+}
+
 export function formatCount(value = 0) {
   return new Intl.NumberFormat().format(value);
 }
@@ -32,4 +52,3 @@ export function formatDateTime(value) {
     minute: "2-digit",
   }).format(date);
 }
-

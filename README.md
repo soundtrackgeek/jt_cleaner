@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.6.2` makes whole-drive scan totals match Windows. Drive results now show used space together with total capacity from the live Windows volume measurement, avoiding logical file-size overcounts caused by NTFS hard links.
+Version `0.6.3` keeps completed Windows scans connected to their trend snapshots even when Windows returns an extended canonical path. Starting a snapshot from Trends now stays on that page and shows live capture feedback until the scan finishes.
 
 ### Included
 
@@ -19,6 +19,7 @@ Version `0.6.2` makes whole-drive scan totals match Windows. Drive results now s
 - Native cleanup for known cache roots; old Downloads and duplicates remain review-only.
 - Storage composition over time with a stacked category chart, fastest-mover ranking, age-cohort heatmap, and a local narrative summary.
 - Per-drive aggregate snapshots containing category totals, age buckets, cleanup signals, and duplicate opportunity—never file contents or a duplicate inventory.
+- Immediate Trends capture feedback with measured file and byte totals while the snapshot scan is running.
 - Same-day snapshot replacement and a 104-snapshot cap per drive, covering roughly two years of weekly history.
 - Native system tray with **Open Luna Clean**, **Capture storage snapshot**, and **Quit Luna Clean** actions.
 - Optional startup with Windows using a hidden `--hidden` launch path.
@@ -60,7 +61,7 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 3. Choose the default home folder, a detected drive, or **Choose folder** for a custom location.
 4. Start the scan and keep the app open while Luna reports progress.
 5. Review findings in **Cleanup review**. Safe caches are selected only when data exists; duplicate files and old Downloads are never selected automatically.
-6. Open **Trends** after the scan to compare the current snapshot with earlier scans. A second scan on the same day refreshes that day instead of adding noise.
+6. Open **Trends** after the scan to compare the current snapshot with earlier scans. Capturing from Trends shows progress in place, and a second scan on the same day refreshes that day instead of adding noise.
 7. Choose **Investigate with GPT-5.6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
 
 ## Tray and scheduled snapshots

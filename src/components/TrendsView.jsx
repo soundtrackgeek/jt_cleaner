@@ -1,5 +1,6 @@
 import {
   ArrowRight20Regular,
+  ArrowSync24Regular,
   ArrowTrending24Regular,
   Calendar24Regular,
   Chat24Regular,
@@ -15,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { formatBytes } from "../lib/format.js";
+import { formatBytes, formatCount } from "../lib/format.js";
 
 const palette = ["#8577ff", "#55d8b0", "#efb74b", "#62a9e8", "#db7d9f"];
 const ageRows = [
@@ -99,16 +100,21 @@ function TrendTooltip({ active, payload, label, series }) {
   );
 }
 
-function EmptyTrends({ onCapture }) {
+function EmptyTrends({ onCapture, scanning, progress }) {
   return (
     <>
       <main className="trends-workspace trend-empty-workspace">
-        <section className="trend-empty">
-          <span><ArrowTrending24Regular /></span>
-          <p>STORAGE TRENDS</p>
-          <h1>Your storage story starts with one scan.</h1>
-          <p>Luna stores compact totals and category summaries—never a second copy of your files.</p>
-          <button className="primary-button" type="button" onClick={onCapture}>Capture the first snapshot</button>
+        <section className={`trend-empty ${scanning ? "is-capturing" : ""}`} aria-live="polite" aria-busy={scanning}>
+          <span>{scanning ? <ArrowSync24Regular /> : <ArrowTrending24Regular />}</span>
+          <p>{scanning ? "CAPTURING SNAPSHOT" : "STORAGE TRENDS"}</p>
+          <h1>{scanning ? "Scanning your storage now…" : "Your storage story starts with one scan."}</h1>
+          <p>{scanning
+            ? `${formatCount(progress?.scannedFiles || 0)} files measured · ${formatBytes(progress?.scannedBytes || 0)}. Keep Luna open while this snapshot finishes.`
+            : "Luna stores compact totals and category summaries—never a second copy of your files."}</p>
+          <button className="primary-button" type="button" disabled={scanning} onClick={onCapture}>
+            {scanning ? "Capturing…" : "Capture the first snapshot"}
+          </button>
+          {scanning && <div className="trend-scan-progress" aria-hidden="true"><i /></div>}
         </section>
       </main>
       <aside className="trend-story-panel empty-story-panel">
@@ -119,10 +125,10 @@ function EmptyTrends({ onCapture }) {
   );
 }
 
-export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy }) {
+export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy, scanning, progress }) {
   const resolvedHistory = history || (!window.__TAURI_INTERNALS__ ? previewTrendHistory : null);
   const snapshots = resolvedHistory?.snapshots || [];
-  if (!snapshots.length) return <EmptyTrends onCapture={onCapture} />;
+  if (!snapshots.length) return <EmptyTrends onCapture={onCapture} scanning={scanning} progress={progress} />;
 
   const first = snapshots[0];
   const latest = snapshots.at(-1);
@@ -181,8 +187,8 @@ export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy }) {
             <h1>The story of your storage</h1>
             <p>{snapshots.length} compact {snapshots.length === 1 ? "snapshot" : "snapshots"} for {resolvedHistory.rootName}. See what is growing, shrinking, and quietly getting stale.</p>
           </div>
-          <button className="secondary-button trend-capture" type="button" onClick={onCapture}>
-            <Calendar24Regular /> Capture now
+          <button className="secondary-button trend-capture" type="button" disabled={scanning} onClick={onCapture}>
+            {scanning ? <ArrowSync24Regular className="capture-spinner" /> : <Calendar24Regular />} {scanning ? "Capturing…" : "Capture now"}
           </button>
         </header>
 

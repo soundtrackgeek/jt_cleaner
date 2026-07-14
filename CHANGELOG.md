@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3] - 2026-07-14
+
+### Fixed
+
+- Trend history now treats Windows display paths such as `C:\` and canonical extended paths such as `\\?\C:\` as the same scan root, while preserving and migrating snapshots saved under the earlier identity.
+- Snapshot actions on Trends now show an immediate capturing state, live measured totals, and disabled duplicate actions until the scan finishes.
+
 ## [0.6.2] - 2026-07-14
 
 ### Fixed

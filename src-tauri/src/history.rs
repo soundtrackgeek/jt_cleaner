@@ -63,6 +63,7 @@ pub fn history_path(app_data_dir: &Path) -> PathBuf {
 pub fn save_snapshot(path: &Path, result: &ScanResult) -> Result<TrendHistory, String> {
     let mut store = read_store(path)?;
     let root_id = root_id(&result.root);
+    migrate_legacy_history(&mut store, &result.root, &root_id);
     let snapshot = snapshot_from_scan(result);
     let history = store
         .roots
@@ -83,21 +84,31 @@ pub fn save_snapshot(path: &Path, result: &ScanResult) -> Result<TrendHistory, S
 pub fn load_history(path: &Path, root: &str) -> Result<TrendHistory, String> {
     let store = read_store(path)?;
     let id = root_id(root);
-    Ok(store
+    let mut history = store
         .roots
         .get(&id)
         .cloned()
+        .or_else(|| {
+            legacy_root_ids(root)
+                .into_iter()
+                .find_map(|legacy_id| store.roots.get(&legacy_id).cloned())
+        })
         .unwrap_or_else(|| TrendHistory {
-            root_id: id,
+            root_id: id.clone(),
             root_name: display_name(root),
             snapshots: Vec::new(),
-        }))
+        });
+    history.root_id = id;
+    Ok(history)
 }
 
 pub fn clear_history(path: &Path, root: &str) -> Result<TrendHistory, String> {
     let mut store = read_store(path)?;
     let id = root_id(root);
     store.roots.remove(&id);
+    for legacy_id in legacy_root_ids(root) {
+        store.roots.remove(&legacy_id);
+    }
     write_store(path, &store)?;
     Ok(TrendHistory {
         root_id: id,
@@ -166,8 +177,85 @@ fn insert_snapshot(snapshots: &mut Vec<StorageSnapshot>, snapshot: StorageSnapsh
 }
 
 fn root_id(root: &str) -> String {
+    let normalized = normalized_root(root);
+    blake3::hash(normalized.as_bytes()).to_hex()[..16].to_string()
+}
+
+fn normalized_root(root: &str) -> String {
+    let normalized = root.replace('/', "\\").to_lowercase();
+    let without_extended_prefix = if let Some(path) = normalized.strip_prefix(r"\\?\unc\") {
+        format!(r"\\{path}")
+    } else if let Some(path) = normalized.strip_prefix(r"\\?\") {
+        path.to_string()
+    } else {
+        normalized
+    };
+    let without_trailing_separator = without_extended_prefix.trim_end_matches('\\');
+    if without_trailing_separator.is_empty() {
+        "\\".to_string()
+    } else {
+        without_trailing_separator.to_string()
+    }
+}
+
+fn legacy_root_id(root: &str) -> String {
     let normalized = root.replace('/', "\\").to_lowercase();
     blake3::hash(normalized.as_bytes()).to_hex()[..16].to_string()
+}
+
+fn legacy_root_ids(root: &str) -> Vec<String> {
+    let normalized = root.replace('/', "\\").to_lowercase();
+    let mut path_variants = vec![normalized.clone()];
+    if let Some(path) = normalized.strip_prefix(r"\\?\unc\") {
+        path_variants.push(format!(r"\\{path}"));
+    } else if let Some(path) = normalized.strip_prefix(r"\\?\") {
+        path_variants.push(path.to_string());
+    } else if let Some(path) = normalized.strip_prefix(r"\\") {
+        path_variants.push(format!(r"\\?\unc\{path}"));
+    } else if normalized.as_bytes().get(1) == Some(&b':') {
+        path_variants.push(format!(r"\\?\{normalized}"));
+    }
+
+    let mut ids = Vec::new();
+    for variant in path_variants {
+        let trimmed = variant.trim_end_matches('\\');
+        for legacy_path in [variant.as_str(), trimmed] {
+            if legacy_path.is_empty() {
+                continue;
+            }
+            let id = legacy_root_id(legacy_path);
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
+fn migrate_legacy_history(store: &mut SnapshotStore, root: &str, root_id: &str) {
+    let mut legacy_snapshots = Vec::new();
+    for legacy_id in legacy_root_ids(root) {
+        if legacy_id != root_id {
+            if let Some(history) = store.roots.remove(&legacy_id) {
+                legacy_snapshots.extend(history.snapshots);
+            }
+        }
+    }
+    if legacy_snapshots.is_empty() {
+        return;
+    }
+
+    let history = store
+        .roots
+        .entry(root_id.to_string())
+        .or_insert_with(|| TrendHistory {
+            root_id: root_id.to_string(),
+            root_name: display_name(root),
+            snapshots: Vec::new(),
+        });
+    for snapshot in legacy_snapshots {
+        insert_snapshot(&mut history.snapshots, snapshot);
+    }
 }
 
 fn display_name(root: &str) -> String {
@@ -239,6 +327,42 @@ mod tests {
         insert_snapshot(&mut snapshots, sample_snapshot(1, 20));
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].total_bytes, 20);
+    }
+
+    #[test]
+    fn treats_windows_extended_and_display_paths_as_the_same_root() {
+        assert_eq!(root_id(r"C:\"), root_id(r"\\?\C:\"));
+        assert_eq!(root_id(r"C:\Users\Luna\"), root_id(r"\\?\C:\Users\Luna"));
+        assert_eq!(
+            root_id(r"\\server\share\photos"),
+            root_id(r"\\?\UNC\server\share\photos\")
+        );
+    }
+
+    #[test]
+    fn finds_and_migrates_snapshots_saved_with_the_legacy_windows_id() {
+        let display_root = r"C:\";
+        let extended_root = r"\\?\C:\";
+        let current_id = root_id(display_root);
+        let legacy_id = legacy_root_id(extended_root);
+        assert_ne!(current_id, legacy_id);
+        assert!(legacy_root_ids(display_root).contains(&legacy_id));
+
+        let mut store = SnapshotStore {
+            schema_version: SCHEMA_VERSION,
+            roots: HashMap::from([(
+                legacy_id.clone(),
+                TrendHistory {
+                    root_id: legacy_id.clone(),
+                    root_name: "Local Disk (C:)".to_string(),
+                    snapshots: vec![sample_snapshot(1, 42)],
+                },
+            )]),
+        };
+        migrate_legacy_history(&mut store, extended_root, &current_id);
+
+        assert!(!store.roots.contains_key(&legacy_id));
+        assert_eq!(store.roots[&current_id].snapshots[0].total_bytes, 42);
     }
 
     #[test]

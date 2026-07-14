@@ -39,6 +39,7 @@ struct AppStatus {
     version: &'static str,
     backend_ready: bool,
     default_scan_root: Option<String>,
+    update_check_interval_minutes: u64,
 }
 
 #[derive(Serialize)]
@@ -59,16 +60,19 @@ struct ScheduledScanEvent {
 
 #[tauri::command]
 fn app_status(app: AppHandle) -> AppStatus {
-    let default_scan_root = settings_file(&app)
+    let app_settings = settings_file(&app)
         .ok()
         .and_then(|path| settings::load(&path).ok())
-        .and_then(|settings| settings.default_scan_root)
+        .unwrap_or_default();
+    let default_scan_root = app_settings
+        .default_scan_root
         .or_else(|| scanner::default_scan_root().ok());
     AppStatus {
         name: "Luna Clean",
         version: env!("CARGO_PKG_VERSION"),
         backend_ready: true,
         default_scan_root,
+        update_check_interval_minutes: app_settings.update_check_interval_minutes,
     }
 }
 
@@ -148,6 +152,14 @@ fn update_schedule(
 #[tauri::command]
 fn update_default_scan_root(app: AppHandle, root: String) -> Result<settings::AppSettings, String> {
     settings::update_default_scan_root(&settings_file(&app)?, root)
+}
+
+#[tauri::command]
+fn update_update_check_interval(
+    app: AppHandle,
+    interval_minutes: u64,
+) -> Result<settings::AppSettings, String> {
+    settings::update_check_interval(&settings_file(&app)?, interval_minutes)
 }
 
 #[tauri::command]
@@ -404,6 +416,7 @@ pub fn run() {
             get_schedule_status,
             update_schedule,
             update_default_scan_root,
+            update_update_check_interval,
             capture_scheduled_snapshot
         ])
         .build(tauri::generate_context!())

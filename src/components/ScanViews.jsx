@@ -237,7 +237,7 @@ export function ScheduleView({ schedule, roots, selectedRoot, onScheduleChange, 
   );
 }
 
-export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder, startupEnabled, startupBusy, onStartupToggle, aiStatus, onSaveApiKey, onRemoveApiKey, updateState, onCheckForUpdates, onInstallUpdate }) {
+export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder, startupEnabled, startupBusy, onStartupToggle, aiStatus, onSaveApiKey, onRemoveApiKey, updateState, updateCheckIntervalMinutes, onCheckForUpdates, onUpdateCheckIntervalChange, onInstallUpdate }) {
   const [diagnostics, setDiagnostics] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [credentialBusy, setCredentialBusy] = useState(false);
@@ -295,7 +295,7 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
           <span className={`update-state ${updateState?.phase === "available" ? "has-update" : ""}`}><ArrowDownload24Regular /></span>
           <div>
             <h2>Windows updates</h2>
-            <p>{updateState?.message || `Version ${updateState?.currentVersion || "0.6.3"} · signed release channel`}</p>
+            <p>{updateState?.message || `Version ${updateState?.currentVersion || "0.8.0"} · signed release channel`}</p>
           </div>
           <div className="update-actions">
             <button className="secondary-button" type="button" disabled={updateBusy} onClick={onCheckForUpdates}>{updateState?.phase === "checking" ? "Checking…" : "Check now"}</button>
@@ -303,6 +303,17 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
           </div>
         </div>
         {["downloading", "installing", "restarting"].includes(updateState?.phase) && <div className="update-progress" aria-label={`Update progress ${updateState.progress || 0}%`}><i style={{ width: `${updateState.progress || 4}%` }} /></div>}
+        <label className="update-interval" htmlFor="update-check-interval">
+          <span><strong>Check automatically</strong><small>While the full Luna window is open</small></span>
+          <select id="update-check-interval" value={updateCheckIntervalMinutes} disabled={updateBusy} onChange={(event) => onUpdateCheckIntervalChange(Number(event.target.value))}>
+            <option value={5}>Every 5 minutes</option>
+            <option value={15}>Every 15 minutes</option>
+            <option value={30}>Every 30 minutes</option>
+            <option value={60}>Every hour</option>
+            <option value={360}>Every 6 hours</option>
+            <option value={1440}>Every day</option>
+          </select>
+        </label>
         <small>Every installer and update manifest must match Luna's embedded signing key before installation can begin.</small>
       </section>
       <section className="feature-surface credential-card">

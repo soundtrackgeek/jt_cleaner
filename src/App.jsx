@@ -381,7 +381,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.6.3");
+  const [appVersion, setAppVersion] = useState("0.8.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -395,8 +395,12 @@ export function App() {
   const [aiStatus, setAiStatus] = useState({ configured: false, model: "gpt-5.6-luna", source: "none" });
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.6.3", availableVersion: "", progress: 0, message: "" });
+  const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.8.0", availableVersion: "", progress: 0, message: "" });
+  const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
+  const updateCheckInFlightRef = useRef(false);
+  const announcedUpdateVersionRef = useRef("");
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
   const selectedSize = useMemo(
@@ -423,6 +427,7 @@ export function App() {
         setScheduleStatus(schedule);
         setStartupEnabled(autostart);
         setAiStatus(ai);
+        setUpdateCheckIntervalMinutes(status.updateCheckIntervalMinutes || 5);
         setUpdateState((current) => ({ ...current, currentVersion: status.version }));
       })
       .catch(() => undefined);
@@ -433,6 +438,15 @@ export function App() {
     const timer = window.setTimeout(() => checkForUpdates(true), 1200);
     return () => window.clearTimeout(timer);
   }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return undefined;
+    const interval = window.setInterval(
+      () => checkForUpdates(true),
+      Math.max(1, updateCheckIntervalMinutes) * 60 * 1000,
+    );
+    return () => window.clearInterval(interval);
+  }, [isTauri, updateCheckIntervalMinutes]);
 
   useEffect(() => {
     if (!isTauri || !selectedRoot) return;
@@ -548,6 +562,22 @@ export function App() {
     }
   }
 
+  async function changeUpdateCheckInterval(intervalMinutes) {
+    const nextInterval = Number(intervalMinutes);
+    if (!isTauri) {
+      setUpdateCheckIntervalMinutes(nextInterval);
+      setToast(`Automatic update checks will run every ${nextInterval} minutes in the installed app.`);
+      return;
+    }
+    try {
+      const updated = await invoke("update_update_check_interval", { intervalMinutes: nextInterval });
+      setUpdateCheckIntervalMinutes(updated.updateCheckIntervalMinutes);
+      setToast(`Automatic update checks now run every ${updated.updateCheckIntervalMinutes} minutes.`);
+    } catch (error) {
+      setToast(`Update interval unchanged: ${String(error)}`);
+    }
+  }
+
   async function changeSchedule(next) {
     if (!isTauri) {
       setScheduleStatus((current) => ({ ...current, ...next }));
@@ -626,6 +656,8 @@ export function App() {
       setUpdateState((current) => ({ ...current, phase: "current", message: "Update checks run in the installed Windows app." }));
       return;
     }
+    if (updateCheckInFlightRef.current) return;
+    updateCheckInFlightRef.current = true;
     setUpdateState((current) => ({ ...current, phase: "checking", progress: 0, message: "Checking the signed release channel…" }));
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
@@ -638,24 +670,45 @@ export function App() {
           availableVersion: update.version,
           message: `Luna Clean ${update.version} is ready to install.`,
         }));
+        if (announcedUpdateVersionRef.current !== update.version) {
+          announcedUpdateVersionRef.current = update.version;
+          setUpdateToastVersion(update.version);
+        }
         if (!silent) setToast(`Luna Clean ${update.version} is available.`);
       } else {
+        updateRef.current = null;
+        announcedUpdateVersionRef.current = "";
+        setUpdateToastVersion("");
         setUpdateState((current) => ({ ...current, phase: "current", availableVersion: "", message: "You have the newest signed release." }));
         if (!silent) setToast("Luna Clean is up to date.");
       }
     } catch (error) {
-      updateRef.current = null;
-      setUpdateState((current) => ({ ...current, phase: "error", message: String(error) }));
+      if (silent && updateRef.current) {
+        setUpdateState((current) => ({
+          ...current,
+          phase: "available",
+          availableVersion: updateRef.current.version,
+          message: `Luna Clean ${updateRef.current.version} is ready to install.`,
+        }));
+      } else {
+        updateRef.current = null;
+        setUpdateState((current) => ({ ...current, phase: "error", message: String(error) }));
+      }
       if (!silent) setToast(`Update check stopped: ${String(error)}`);
+    } finally {
+      updateCheckInFlightRef.current = false;
     }
   }
 
   async function installUpdate() {
+    if (updateCheckInFlightRef.current) return;
     const update = updateRef.current;
     if (!update) {
       await checkForUpdates();
       return;
     }
+    updateCheckInFlightRef.current = true;
+    setUpdateToastVersion("");
     let downloaded = 0;
     let contentLength = 0;
     setUpdateState((current) => ({ ...current, phase: "downloading", progress: 0, message: "Downloading the signed installer…" }));
@@ -675,8 +728,11 @@ export function App() {
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (error) {
+      announcedUpdateVersionRef.current = "";
       setUpdateState((current) => ({ ...current, phase: "error", message: String(error) }));
       setToast(`Update installation stopped: ${String(error)}`);
+    } finally {
+      updateCheckInFlightRef.current = false;
     }
   }
 
@@ -785,7 +841,9 @@ export function App() {
         onSaveApiKey={saveApiKey}
         onRemoveApiKey={removeApiKey}
         updateState={updateState}
+        updateCheckIntervalMinutes={updateCheckIntervalMinutes}
         onCheckForUpdates={() => checkForUpdates(false)}
+        onUpdateCheckIntervalChange={changeUpdateCheckInterval}
         onInstallUpdate={installUpdate}
       />
     ),
@@ -1018,7 +1076,14 @@ export function App() {
           onConfirm={completeCleanup}
         />
       )}
-      {toast && <div className="toast" role="status">{toast}</div>}
+      {toast && <div className={`toast ${updateToastVersion ? "above-update-toast" : ""}`} role="status">{toast}</div>}
+      {updateToastVersion && (
+        <div className="toast update-toast" role="alert">
+          <span>Luna Clean {updateToastVersion} is available.</span>
+          <button className="primary-button" type="button" disabled={updateState.phase !== "available"} onClick={installUpdate}>Update</button>
+          <button className="toast-dismiss" type="button" aria-label="Dismiss update notification" onClick={() => setUpdateToastVersion("")}><Dismiss24Regular /></button>
+        </div>
+      )}
     </div>
   );
 }

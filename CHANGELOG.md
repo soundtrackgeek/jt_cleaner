@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0] - 2026-07-14
+
+### Added
+
+- Check the signed release channel automatically while the full window is open, every five minutes by default, with a persisted cadence configurable from five minutes to one day in Settings.
+- Show a dismissible update-available toast with an **Update** button that starts the existing signed download and installation flow.
+
 ## [0.7.2] - 2026-07-14
 
 ### Fixed

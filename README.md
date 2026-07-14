@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.7.2` saves the default scan location in Luna's local app settings. The selected home folder or drive is restored after closing the window, quitting the tray app, or installing an update.
+Version `0.8.0` checks the signed release channel automatically on a configurable cadence while the full Luna window is open. The default is every five minutes, and an available release appears in an actionable toast with an **Update** button.
 
 ### Included
 
@@ -32,7 +32,8 @@ Version `0.7.2` saves the default scan location in Luna's local app settings. Th
 - Strict structured AI responses with evidence, confidence, risk, and review-safe next actions.
 - Masked in-app OpenAI key setup with Rust-side validation and Windows Credential Manager storage.
 - Development fallback through `OPENAI_API_KEY`, with the saved Windows credential taking priority.
-- Automatic update checks when the full interface opens, plus manual **Check now** in Settings.
+- Configurable automatic update checks while the full interface is open, every five minutes by default, plus manual **Check now** in Settings.
+- Actionable update-available toasts with a direct **Update** button.
 - Signed in-app update download, progress, passive installation, and restart.
 - GitHub Actions quality checks and automatic versioned Windows Releases on pushes to `master`.
 - Native Tauri 2 shell and NSIS bundle configuration.
@@ -74,7 +75,7 @@ Open **Settings** to enable **Start with Windows**. Luna then starts hidden in t
 
 ## Updates and releases
 
-Luna checks the GitHub release channel only when the full window opens, preserving the low-memory and low-network tray state. Open **Settings → Windows updates** to check manually. If a newer semantic version exists, Luna downloads the NSIS package, verifies its updater signature against the public key embedded in the app, installs it in passive mode, and relaunches. Installation always requires an explicit button press.
+Luna checks the GitHub release channel when the full window opens and then every five minutes by default. Open **Settings → Windows updates** to choose a cadence from five minutes to one day or to check manually. The tray-only process remains network-quiet until the full interface opens. If a newer semantic version exists, Luna shows an actionable toast; choosing **Update** downloads the NSIS package, verifies its updater signature against the public key embedded in the app, installs it in passive mode, and relaunches. Installation always requires an explicit button press.
 
 Every push to `master` runs `.github/workflows/release.yml`. The workflow checks synchronized versions, builds the frontend, checks Rust formatting, runs native tests, then creates a signed NSIS installer, updater signature, `latest.json`, `vMAJOR.MINOR.PATCH` tag, and GitHub Release. Before pushing release code, update the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, then add the matching dated heading to `CHANGELOG.md`; `npm run check:version` enforces this.
 

@@ -1,9 +1,12 @@
+import { useEffect, useState } from "react";
 import {
   ArrowRight20Regular,
   ArrowSync24Regular,
   ArrowTrending24Regular,
   Calendar24Regular,
   Chat24Regular,
+  Delete24Regular,
+  Dismiss24Regular,
   MoreHorizontal24Regular,
   Sparkle24Regular,
 } from "@fluentui/react-icons";
@@ -16,7 +19,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { formatBytes, formatCount, formatScanProgressSize } from "../lib/format.js";
+import { formatBytes, formatCount, formatDateTime, formatScanProgressSize } from "../lib/format.js";
 
 const palette = ["#8577ff", "#55d8b0", "#efb74b", "#62a9e8", "#db7d9f"];
 const ageRows = [
@@ -81,6 +84,14 @@ function formatDelta(value) {
   return `${prefix}${formatBytes(Math.abs(value))}`;
 }
 
+function titleFromId(value) {
+  return value
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() || ""}${part.slice(1)}`)
+    .join(" ");
+}
+
 function TrendTooltip({ active, payload, label, series }) {
   if (!active || !payload?.length) return null;
   return (
@@ -125,10 +136,172 @@ function EmptyTrends({ onCapture, scanning, progress }) {
   );
 }
 
-export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy, scanning, progress }) {
-  const resolvedHistory = history || (!window.__TAURI_INTERNALS__ ? previewTrendHistory : null);
+function SnapshotManager({ history, onClose, onDeleteSnapshot }) {
+  const snapshots = history.snapshots || [];
+  const [selectedAt, setSelectedAt] = useState(() => snapshots.at(-1)?.capturedAt || "");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const selected = snapshots.find((snapshot) => snapshot.capturedAt === selectedAt) || snapshots.at(-1);
+
+  useEffect(() => {
+    if (selected && selected.capturedAt !== selectedAt) {
+      setSelectedAt(selected.capturedAt);
+    }
+  }, [selected, selectedAt]);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape" && !deleting) onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [deleting, onClose]);
+
+  async function deleteSelected() {
+    if (!selected) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await onDeleteSnapshot(selected.capturedAt);
+      setConfirmingDelete(false);
+    } catch (error) {
+      setDeleteError(String(error));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (!selected) return null;
+
+  const categories = [...selected.categories].sort((left, right) => right.sizeBytes - left.sizeBytes);
+  const ageBuckets = [
+    ["0–30 days", selected.ageBuckets.recentBytes],
+    ["31–90 days", selected.ageBuckets.inactive30To90Bytes],
+    ["91–180 days", selected.ageBuckets.inactive90To180Bytes],
+    ["180+ days", selected.ageBuckets.inactive180PlusBytes],
+    ["Unknown", selected.ageBuckets.unknownBytes],
+  ];
+
+  return (
+    <div
+      className="modal-backdrop snapshot-manager-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !deleting) onClose();
+      }}
+    >
+      <section className="snapshot-manager" role="dialog" aria-modal="true" aria-labelledby="snapshot-manager-title" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="snapshot-manager-header">
+          <div>
+            <span>SNAPSHOT HISTORY</span>
+            <h2 id="snapshot-manager-title">Inspect snapshots</h2>
+            <p>Review compact scan totals or remove one capture from {history.rootName}.</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close snapshot history" disabled={deleting} onClick={onClose}><Dismiss24Regular /></button>
+        </header>
+
+        <div className="snapshot-manager-body">
+          <nav className="snapshot-list" aria-label="Saved snapshots">
+            {[...snapshots].reverse().map((snapshot) => (
+              <button
+                className={snapshot.capturedAt === selected.capturedAt ? "is-selected" : ""}
+                type="button"
+                key={snapshot.capturedAt}
+                onClick={() => {
+                  setSelectedAt(snapshot.capturedAt);
+                  setConfirmingDelete(false);
+                  setDeleteError("");
+                }}
+              >
+                <span>{formatDateTime(snapshot.capturedAt)}</span>
+                <strong>{formatBytes(snapshot.totalBytes)}</strong>
+                <small>{formatCount(snapshot.fileCount)} files</small>
+              </button>
+            ))}
+          </nav>
+
+          <article className="snapshot-inspector">
+            <div className="snapshot-inspector-heading">
+              <div><span>CAPTURED</span><h3>{formatDateTime(selected.capturedAt)}</h3></div>
+              <strong>{formatBytes(selected.totalBytes)}</strong>
+            </div>
+
+            <div className="snapshot-stat-grid">
+              <div><span>Files</span><strong>{formatCount(selected.fileCount)}</strong></div>
+              <div><span>Folders</span><strong>{formatCount(selected.folderCount)}</strong></div>
+              <div><span>Categories</span><strong>{formatCount(selected.categories.length)}</strong></div>
+              <div><span>Duplicate copies</span><strong>{formatBytes(selected.duplicateReclaimableBytes)}</strong></div>
+            </div>
+
+            <section className="snapshot-detail-section">
+              <div className="snapshot-section-heading"><h4>Top-level categories</h4><span>{categories.length} stored</span></div>
+              <div className="snapshot-detail-list">
+                {categories.map((category) => (
+                  <div key={category.id}>
+                    <span><strong>{category.name}</strong><small>{formatCount(category.fileCount)} files{category.lastUsedDays == null ? "" : ` · last used ${formatCount(category.lastUsedDays)} days ago`}</small></span>
+                    <b>{formatBytes(category.sizeBytes)}</b>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="snapshot-detail-section snapshot-age-section">
+              <div className="snapshot-section-heading"><h4>File activity age</h4><span>Review signal only</span></div>
+              <div className="snapshot-age-grid">
+                {ageBuckets.map(([label, bytes]) => <div key={label}><span>{label}</span><strong>{formatBytes(bytes)}</strong></div>)}
+              </div>
+            </section>
+
+            <section className="snapshot-detail-section">
+              <div className="snapshot-section-heading"><h4>Cleanup signals</h4><span>Captured aggregates</span></div>
+              {selected.cleanupSignals.length ? (
+                <div className="snapshot-detail-list compact-list">
+                  {selected.cleanupSignals.map((signal) => (
+                    <div key={signal.id}><span><strong>{titleFromId(signal.id)}</strong><small>{formatCount(signal.fileCount)} files</small></span><b>{formatBytes(signal.sizeBytes)}</b></div>
+                  ))}
+                </div>
+              ) : <p className="snapshot-empty-detail">No cleanup signals were present in this capture.</p>}
+            </section>
+
+            <footer className="snapshot-delete-area">
+              {confirmingDelete ? (
+                <div className="snapshot-delete-confirm" role="alert">
+                  <p><strong>Delete this snapshot?</strong><span>This removes only the stored aggregate history. It does not delete scanned files.</span></p>
+                  <div>
+                    <button className="secondary-button" type="button" disabled={deleting} onClick={() => setConfirmingDelete(false)}>Keep snapshot</button>
+                    <button className="danger-button" type="button" disabled={deleting} onClick={deleteSelected}><Delete24Regular /> {deleting ? "Deleting…" : "Delete snapshot"}</button>
+                  </div>
+                </div>
+              ) : (
+                <button className="danger-link" type="button" onClick={() => setConfirmingDelete(true)}><Delete24Regular /> Delete this snapshot</button>
+              )}
+              {deleteError && <p className="snapshot-delete-error">Could not delete the snapshot: {deleteError}</p>}
+            </footer>
+          </article>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function TrendsView({ history, onCapture, onAsk, onDeleteSnapshot, aiReport, aiBusy, scanning, progress }) {
+  const [previewHistory, setPreviewHistory] = useState(previewTrendHistory);
+  const [managerOpen, setManagerOpen] = useState(false);
+  const resolvedHistory = history || (!window.__TAURI_INTERNALS__ ? previewHistory : null);
   const snapshots = resolvedHistory?.snapshots || [];
   if (!snapshots.length) return <EmptyTrends onCapture={onCapture} scanning={scanning} progress={progress} />;
+
+  async function deleteSnapshot(capturedAt) {
+    if (onDeleteSnapshot) {
+      await onDeleteSnapshot(capturedAt);
+      return;
+    }
+    setPreviewHistory((current) => ({
+      ...current,
+      snapshots: current.snapshots.filter((snapshot) => snapshot.capturedAt !== capturedAt),
+    }));
+  }
 
   const first = snapshots[0];
   const latest = snapshots.at(-1);
@@ -187,9 +360,12 @@ export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy, scanni
             <h1>The story of your storage</h1>
             <p>{snapshots.length} compact {snapshots.length === 1 ? "snapshot" : "snapshots"} for {resolvedHistory.rootName}. See what is growing, shrinking, and quietly getting stale.</p>
           </div>
-          <button className="secondary-button trend-capture" type="button" disabled={scanning} onClick={onCapture}>
-            {scanning ? <ArrowSync24Regular className="capture-spinner" /> : <Calendar24Regular />} {scanning ? "Capturing…" : "Capture now"}
-          </button>
+          <div className="trend-header-actions">
+            <button className="secondary-button" type="button" onClick={() => setManagerOpen(true)}><Calendar24Regular /> Review snapshots</button>
+            <button className="secondary-button trend-capture" type="button" disabled={scanning} onClick={onCapture}>
+              {scanning ? <ArrowSync24Regular className="capture-spinner" /> : <Calendar24Regular />} {scanning ? "Capturing…" : "Capture now"}
+            </button>
+          </div>
         </header>
 
         <section className="trend-surface composition-card">
@@ -267,7 +443,7 @@ export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy, scanni
         <div className="trend-story-heading">
           <Sparkle24Regular />
           <h2>Luna’s storage story</h2>
-          <button className="icon-button" type="button" aria-label="More trend actions"><MoreHorizontal24Regular /></button>
+          <button className="icon-button" type="button" aria-label="Review snapshots" onClick={() => setManagerOpen(true)}><MoreHorizontal24Regular /></button>
         </div>
         <p className="trend-story-intro">{report?.summary || "Here’s what changed across your snapshots."}</p>
         <div className="story-hero">
@@ -285,6 +461,7 @@ export function TrendsView({ history, onCapture, onAsk, aiReport, aiBusy, scanni
           <button className="story-link" type="button" disabled={aiBusy} onClick={onAsk}>Investigate the changes <ArrowRight20Regular /></button>
         </div>
       </aside>
+      {managerOpen && <SnapshotManager history={resolvedHistory} onClose={() => setManagerOpen(false)} onDeleteSnapshot={deleteSnapshot} />}
     </>
   );
 }

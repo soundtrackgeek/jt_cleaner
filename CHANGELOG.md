@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0] - 2026-07-14
+
+### Added
+
+- Inspect each saved storage snapshot from Trends, including its captured totals, file and folder counts, top-level categories, age cohorts, cleanup signals, and duplicate opportunity.
+- Delete one selected snapshot after confirmation without affecting scanned files or other history entries.
+
 ## [0.8.0] - 2026-07-14
 
 ### Added

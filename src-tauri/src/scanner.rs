@@ -30,10 +30,67 @@ struct CandidateFile {
 
 #[derive(Debug, Default)]
 struct CategoryAccumulator {
+    name: String,
     path: PathBuf,
     size_bytes: u64,
     file_count: u64,
     newest_activity: Option<SystemTime>,
+    can_drill_down: bool,
+}
+
+type StorageAreaAccumulators = HashMap<PathBuf, HashMap<PathBuf, CategoryAccumulator>>;
+
+#[derive(Debug, Default)]
+pub(crate) struct StorageIndex {
+    root: String,
+    children: HashMap<String, Vec<StorageCategory>>,
+}
+
+impl StorageIndex {
+    fn from_accumulators(
+        root: &Path,
+        accumulators: StorageAreaAccumulators,
+        now: SystemTime,
+    ) -> Self {
+        let children = accumulators
+            .into_iter()
+            .map(|(parent, areas)| {
+                let mut areas: Vec<StorageCategory> = areas
+                    .into_values()
+                    .map(|area| StorageCategory {
+                        name: area.name,
+                        path: area.path.to_string_lossy().to_string(),
+                        size_bytes: area.size_bytes,
+                        file_count: area.file_count,
+                        last_used_days: days_since(area.newest_activity, now),
+                        can_drill_down: area.can_drill_down,
+                    })
+                    .collect();
+                areas.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
+                (parent.to_string_lossy().to_string(), areas)
+            })
+            .collect();
+
+        Self {
+            root: root.to_string_lossy().to_string(),
+            children,
+        }
+    }
+
+    pub(crate) fn areas_for(&self, path: &str) -> Result<Vec<StorageCategory>, String> {
+        if self.root.is_empty() {
+            return Err("Run a scan before exploring folders.".to_string());
+        }
+        self.children.get(path).cloned().ok_or_else(|| {
+            "That folder is not part of the current storage scan. Run the scan again and retry."
+                .to_string()
+        })
+    }
+}
+
+pub(crate) struct ScanOutput {
+    pub(crate) result: ScanResult,
+    pub(crate) storage_index: StorageIndex,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -168,7 +225,7 @@ fn scan_progress(
     }
 }
 
-pub fn scan_path<F>(requested_path: &str, mut on_progress: F) -> Result<ScanResult, String>
+pub fn scan_path<F>(requested_path: &str, mut on_progress: F) -> Result<ScanOutput, String>
 where
     F: FnMut(ScanProgress),
 {
@@ -187,7 +244,8 @@ where
     let mut total_bytes = 0_u64;
     let mut file_count = 0_u64;
     let mut folder_count = 0_u64;
-    let mut categories: HashMap<String, CategoryAccumulator> = HashMap::new();
+    let mut storage_areas = StorageAreaAccumulators::new();
+    storage_areas.insert(root.clone(), HashMap::new());
     let mut ages = AgeBuckets::default();
     let mut largest: BinaryHeap<Reverse<(u64, String, Option<SystemTime>)>> = BinaryHeap::new();
     let mut duplicate_candidates: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
@@ -217,6 +275,7 @@ where
 
         if entry.file_type().is_dir() {
             folder_count = folder_count.saturating_add(1);
+            storage_areas.entry(entry.path().to_path_buf()).or_default();
             continue;
         }
 
@@ -240,17 +299,7 @@ where
         total_bytes = total_bytes.saturating_add(size);
         file_count = file_count.saturating_add(1);
         add_age_bytes(&mut ages, size, activity, now);
-
-        let (category_name, category_path) = top_level_category(&root, entry.path());
-        let category = categories
-            .entry(category_name)
-            .or_insert_with(|| CategoryAccumulator {
-                path: category_path,
-                ..CategoryAccumulator::default()
-            });
-        category.size_bytes = category.size_bytes.saturating_add(size);
-        category.file_count = category.file_count.saturating_add(1);
-        category.newest_activity = newest_time(category.newest_activity, activity);
+        record_storage_file(&root, entry.path(), size, activity, &mut storage_areas);
 
         let display_path = entry.path().to_string_lossy().to_string();
         largest.push(Reverse((size, display_path, activity)));
@@ -290,17 +339,8 @@ where
     let duplicate_groups = find_duplicate_groups(duplicate_candidates, now, &mut warnings);
     let cleanup_items = build_cleanup_items(&duplicate_groups, now, &mut warnings);
 
-    let mut categories: Vec<StorageCategory> = categories
-        .into_iter()
-        .map(|(name, category)| StorageCategory {
-            name,
-            path: category.path.to_string_lossy().to_string(),
-            size_bytes: category.size_bytes,
-            file_count: category.file_count,
-            last_used_days: days_since(category.newest_activity, now),
-        })
-        .collect();
-    categories.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
+    let storage_index = StorageIndex::from_accumulators(&root, storage_areas, now);
+    let mut categories = storage_index.areas_for(&root.to_string_lossy())?;
     categories.truncate(24);
 
     let mut large_files: Vec<LargeFile> = largest
@@ -333,22 +373,25 @@ where
 
     let volume_space = volume_space_for_root(&root);
 
-    Ok(ScanResult {
-        root: root.to_string_lossy().to_string(),
-        root_name,
-        total_bytes,
-        drive_total_bytes: volume_space.map(|space| space.total_bytes),
-        drive_used_bytes: volume_space.map(VolumeSpace::used_bytes),
-        file_count,
-        folder_count,
-        categories,
-        large_files,
-        duplicate_groups,
-        cleanup_items,
-        age_buckets: ages,
-        scanned_at: format_time(SystemTime::now()),
-        duration_ms: started.elapsed().as_millis(),
-        warnings,
+    Ok(ScanOutput {
+        result: ScanResult {
+            root: root.to_string_lossy().to_string(),
+            root_name,
+            total_bytes,
+            drive_total_bytes: volume_space.map(|space| space.total_bytes),
+            drive_used_bytes: volume_space.map(VolumeSpace::used_bytes),
+            file_count,
+            folder_count,
+            categories,
+            large_files,
+            duplicate_groups,
+            cleanup_items,
+            age_buckets: ages,
+            scanned_at: format_time(SystemTime::now()),
+            duration_ms: started.elapsed().as_millis(),
+            warnings,
+        },
+        storage_index,
     })
 }
 
@@ -432,16 +475,53 @@ fn should_descend(entry: &DirEntry) -> bool {
     )
 }
 
-fn top_level_category(root: &Path, path: &Path) -> (String, PathBuf) {
-    let relative = path.strip_prefix(root).unwrap_or(path);
-    if let Some(component) = relative.components().next() {
-        let name = component.as_os_str().to_string_lossy().to_string();
-        if relative.components().count() > 1 {
-            return (name.clone(), root.join(name));
+fn record_storage_file(
+    root: &Path,
+    file: &Path,
+    size: u64,
+    activity: Option<SystemTime>,
+    storage_areas: &mut StorageAreaAccumulators,
+) {
+    let mut child = file;
+    while let Some(parent) = child.parent() {
+        if !parent.starts_with(root) {
+            break;
         }
-    }
 
-    ("Files at root".to_string(), root.to_path_buf())
+        let is_direct_file = child == file;
+        let area_path = if is_direct_file { parent } else { child };
+        let name = if is_direct_file {
+            if parent == root {
+                "Files at root".to_string()
+            } else {
+                "Files in this folder".to_string()
+            }
+        } else {
+            child
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| child.to_string_lossy().to_string())
+        };
+
+        let area = storage_areas
+            .entry(parent.to_path_buf())
+            .or_default()
+            .entry(area_path.to_path_buf())
+            .or_insert_with(|| CategoryAccumulator {
+                name,
+                path: area_path.to_path_buf(),
+                can_drill_down: !is_direct_file,
+                ..CategoryAccumulator::default()
+            });
+        area.size_bytes = area.size_bytes.saturating_add(size);
+        area.file_count = area.file_count.saturating_add(1);
+        area.newest_activity = newest_time(area.newest_activity, activity);
+
+        if parent == root {
+            break;
+        }
+        child = parent;
+    }
 }
 
 fn activity_time(metadata: &fs::Metadata) -> Option<SystemTime> {

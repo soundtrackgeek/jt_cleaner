@@ -5,10 +5,12 @@ mod scanner;
 mod schedule;
 mod settings;
 
-use models::{CleanupRequest, CleanupResult, ScanProgress, ScanResult, ScanRootInfo};
+use models::{
+    CleanupRequest, CleanupResult, ScanProgress, ScanResult, ScanRootInfo, StorageCategory,
+};
 use serde::Serialize;
 use std::sync::{
-    Arc,
+    Arc, RwLock,
     atomic::{AtomicBool, Ordering},
 };
 use tauri::{
@@ -21,6 +23,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 #[derive(Default)]
 struct RuntimeState {
     scan_running: Arc<AtomicBool>,
+    storage_index: Arc<RwLock<scanner::StorageIndex>>,
     quitting: AtomicBool,
 }
 
@@ -108,12 +111,30 @@ async fn scan_path(
     path: String,
 ) -> Result<ScanResult, String> {
     let permit = acquire_scan(state.scan_running.clone())?;
+    let storage_index = state.storage_index.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
-        perform_scan(&app, &path, true)
+        let output = perform_scan(&app, &path, true)?;
+        *storage_index
+            .write()
+            .map_err(|_| "The storage explorer index is unavailable.".to_string())? =
+            output.storage_index;
+        Ok(output.result)
     })
     .await
     .map_err(|error| format!("The scan worker stopped unexpectedly: {error}"))?
+}
+
+#[tauri::command]
+fn list_storage_areas(
+    state: State<'_, RuntimeState>,
+    path: String,
+) -> Result<Vec<StorageCategory>, String> {
+    state
+        .storage_index
+        .read()
+        .map_err(|_| "The storage explorer index is unavailable.".to_string())?
+        .areas_for(&path)
 }
 
 #[tauri::command]
@@ -124,6 +145,15 @@ fn get_trend_history(app: AppHandle, root: String) -> Result<history::TrendHisto
 #[tauri::command]
 fn clear_trend_history(app: AppHandle, root: String) -> Result<history::TrendHistory, String> {
     history::clear_history(&history_file(&app)?, &root)
+}
+
+#[tauri::command]
+fn delete_trend_snapshot(
+    app: AppHandle,
+    root: String,
+    captured_at: String,
+) -> Result<history::TrendHistory, String> {
+    history::delete_snapshot(&history_file(&app)?, &root, &captured_at)
 }
 
 #[tauri::command]
@@ -213,15 +243,19 @@ fn settings_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(app_data_dir(app)?.join("settings.json"))
 }
 
-fn perform_scan(app: &AppHandle, path: &str, emit_progress: bool) -> Result<ScanResult, String> {
-    let result = scanner::scan_path(path, |progress: ScanProgress| {
+fn perform_scan(
+    app: &AppHandle,
+    path: &str,
+    emit_progress: bool,
+) -> Result<scanner::ScanOutput, String> {
+    let output = scanner::scan_path(path, |progress: ScanProgress| {
         if emit_progress {
             let _ = app.emit("scan-progress", progress);
         }
     })?;
-    history::save_snapshot(&history_file(app)?, &result)?;
+    history::save_snapshot(&history_file(app)?, &output.result)?;
     schedule::mark_capture(&schedule_file(app)?, path)?;
-    Ok(result)
+    Ok(output)
 }
 
 fn queue_background_scan(app: AppHandle, flag: Arc<AtomicBool>, force: bool) {
@@ -265,7 +299,8 @@ async fn background_scan(app: AppHandle, flag: Arc<AtomicBool>, force: bool) {
     .await;
 
     match outcome {
-        Ok(Ok(result)) => {
+        Ok(Ok(output)) => {
+            let result = output.result;
             let total_bytes = result.reported_used_bytes();
             let _ = app.emit(
                 "scheduled-scan-complete",
@@ -406,9 +441,11 @@ pub fn run() {
             app_status,
             list_scan_roots,
             scan_path,
+            list_storage_areas,
             clean_items,
             get_trend_history,
             clear_trend_history,
+            delete_trend_snapshot,
             ai_status,
             save_api_key,
             delete_api_key,

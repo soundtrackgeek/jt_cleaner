@@ -117,6 +117,28 @@ pub fn clear_history(path: &Path, root: &str) -> Result<TrendHistory, String> {
     })
 }
 
+pub fn delete_snapshot(path: &Path, root: &str, captured_at: &str) -> Result<TrendHistory, String> {
+    if captured_at.trim().is_empty() {
+        return Err("Choose a snapshot to delete.".to_string());
+    }
+
+    let mut store = read_store(path)?;
+    let id = root_id(root);
+    migrate_legacy_history(&mut store, root, &id);
+    let history = store
+        .roots
+        .get_mut(&id)
+        .ok_or_else(|| "That snapshot no longer exists.".to_string())?;
+
+    if !remove_snapshot(&mut history.snapshots, captured_at) {
+        return Err("That snapshot no longer exists.".to_string());
+    }
+
+    let updated = history.clone();
+    write_store(path, &store)?;
+    Ok(updated)
+}
+
 fn snapshot_from_scan(result: &ScanResult) -> StorageSnapshot {
     let categories = result
         .categories
@@ -174,6 +196,12 @@ fn insert_snapshot(snapshots: &mut Vec<StorageSnapshot>, snapshot: StorageSnapsh
     if snapshots.len() > MAX_SNAPSHOTS_PER_ROOT {
         snapshots.drain(..snapshots.len() - MAX_SNAPSHOTS_PER_ROOT);
     }
+}
+
+fn remove_snapshot(snapshots: &mut Vec<StorageSnapshot>, captured_at: &str) -> bool {
+    let previous_len = snapshots.len();
+    snapshots.retain(|snapshot| snapshot.captured_at != captured_at);
+    snapshots.len() != previous_len
 }
 
 fn root_id(root: &str) -> String {
@@ -327,6 +355,19 @@ mod tests {
         insert_snapshot(&mut snapshots, sample_snapshot(1, 20));
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].total_bytes, 20);
+    }
+
+    #[test]
+    fn deletes_only_the_snapshot_with_the_exact_capture_time() {
+        let mut snapshots = vec![sample_snapshot(1, 10), sample_snapshot(2, 20)];
+
+        assert!(remove_snapshot(&mut snapshots, "2026-01-01T12:00:00+00:00"));
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].total_bytes, 20);
+        assert!(!remove_snapshot(
+            &mut snapshots,
+            "2026-01-03T12:00:00+00:00"
+        ));
     }
 
     #[test]

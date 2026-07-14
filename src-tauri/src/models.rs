@@ -39,6 +39,7 @@ pub struct StorageCategory {
     pub size_bytes: u64,
     pub file_count: u64,
     pub last_used_days: Option<u64>,
+    pub can_drill_down: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

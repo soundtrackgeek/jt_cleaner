@@ -381,7 +381,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.8.0");
+  const [appVersion, setAppVersion] = useState("0.9.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -396,7 +396,7 @@ export function App() {
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.8.0", availableVersion: "", progress: 0, message: "" });
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.9.0", availableVersion: "", progress: 0, message: "" });
   const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
   const updateCheckInFlightRef = useRef(false);
@@ -529,6 +529,21 @@ export function App() {
       setToast(`Scan stopped: ${String(error)}`);
     } finally {
       setScanning(false);
+    }
+  }
+
+  async function deleteTrendSnapshot(capturedAt) {
+    if (!isTauri || !selectedRoot) {
+      throw new Error("Snapshot deletion is available in the native Tauri app.");
+    }
+    try {
+      const updated = await invoke("delete_trend_snapshot", { root: selectedRoot, capturedAt });
+      setTrendHistory(updated);
+      setAiReport(null);
+      setToast(`Snapshot from ${formatDateTime(capturedAt)} deleted.`);
+    } catch (error) {
+      setToast(`Snapshot could not be deleted: ${String(error)}`);
+      throw error;
     }
   }
 
@@ -939,6 +954,7 @@ export function App() {
             history={trendHistory}
             onCapture={() => runScan()}
             onAsk={() => runAiInvestigation("Investigate the storage trend over time. Explain the most important movement and the safest next step.")}
+            onDeleteSnapshot={isTauri ? deleteTrendSnapshot : undefined}
             aiReport={aiReport}
             aiBusy={aiBusy}
             scanning={scanning}

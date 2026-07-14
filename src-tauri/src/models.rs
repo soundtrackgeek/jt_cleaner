@@ -52,6 +52,28 @@ pub struct LargeFile {
     pub modified_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeFileDeleteRequest {
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedLargeFile {
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeFileDeleteResult {
+    pub removed_bytes: u64,
+    pub removed_files: u64,
+    pub deleted_files: Vec<DeletedLargeFile>,
+    pub failed: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateFile {

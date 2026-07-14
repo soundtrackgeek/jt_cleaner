@@ -1,6 +1,6 @@
 use crate::models::{
-    AgeBuckets, CleanupItem, CleanupResult, DuplicateFile, DuplicateGroup, LargeFile, ScanProgress,
-    ScanResult, ScanRootInfo, StorageCategory,
+    AgeBuckets, CleanupItem, CleanupResult, DeletedLargeFile, DuplicateFile, DuplicateGroup,
+    LargeFile, LargeFileDeleteResult, ScanProgress, ScanResult, ScanRootInfo, StorageCategory,
 };
 use blake3::Hasher;
 use chrono::{DateTime, Local, SecondsFormat};
@@ -17,6 +17,7 @@ use sysinfo::Disks;
 use walkdir::{DirEntry, WalkDir};
 
 const LARGE_FILE_LIMIT: usize = 40;
+const LARGE_FILE_DELETE_LIMIT: usize = LARGE_FILE_LIMIT;
 const DUPLICATE_CANDIDATE_LIMIT: usize = 20_000;
 const DUPLICATE_SIZE_GROUP_LIMIT: usize = 60;
 const DUPLICATE_FILES_PER_GROUP_LIMIT: usize = 12;
@@ -85,6 +86,184 @@ impl StorageIndex {
             "That folder is not part of the current storage scan. Run the scan again and retry."
                 .to_string()
         })
+    }
+
+    pub(crate) fn remove_files(&mut self, deleted: &[(String, u64)]) {
+        for areas in self.children.values_mut() {
+            for area in areas.iter_mut() {
+                for (path, size_bytes) in deleted {
+                    if storage_area_contains_file(&self.root, area, path) {
+                        area.size_bytes = area.size_bytes.saturating_sub(*size_bytes);
+                        area.file_count = area.file_count.saturating_sub(1);
+                    }
+                }
+            }
+            areas.retain(|area| area.file_count > 0 || area.can_drill_down);
+            areas.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
+        }
+    }
+}
+
+fn storage_area_contains_file(root: &str, area: &StorageCategory, file: &str) -> bool {
+    let root = Path::new(root);
+    let area_path = Path::new(&area.path);
+    let file_path = Path::new(file);
+    if area_path == root {
+        file_path.parent() == Some(root)
+    } else {
+        file_path.starts_with(area_path)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LargeFileMetadata {
+    pub(crate) name: String,
+    pub(crate) relative_path: String,
+    pub(crate) extension: String,
+    pub(crate) size_bytes: u64,
+    pub(crate) last_used_days: Option<u64>,
+    pub(crate) activity_at: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LargeFileIndex {
+    root: PathBuf,
+    files: HashMap<String, LargeFile>,
+}
+
+impl LargeFileIndex {
+    pub(crate) fn from_scan(root: &str, files: &[LargeFile]) -> Self {
+        Self {
+            root: PathBuf::from(root),
+            files: files
+                .iter()
+                .cloned()
+                .map(|file| (file.path.clone(), file))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn metadata_for(&self, path: &str) -> Result<LargeFileMetadata, String> {
+        let record = self.record_for(path)?;
+        let canonical = self.validate_record(record)?;
+        let relative_path = canonical
+            .strip_prefix(&self.root)
+            .map_err(|_| {
+                "That file is outside the current scan root. Run the scan again and retry."
+                    .to_string()
+            })?
+            .to_string_lossy()
+            .to_string();
+        let extension = canonical
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+
+        Ok(LargeFileMetadata {
+            name: record.name.clone(),
+            relative_path,
+            extension,
+            size_bytes: record.size_bytes,
+            last_used_days: record.last_used_days,
+            activity_at: record.modified_at.clone(),
+        })
+    }
+
+    pub(crate) fn delete_files(
+        &mut self,
+        paths: &[String],
+    ) -> Result<LargeFileDeleteResult, String> {
+        if paths.is_empty() {
+            return Err("Select at least one large file to delete.".to_string());
+        }
+        if paths.len() > LARGE_FILE_DELETE_LIMIT {
+            return Err(format!(
+                "Delete at most {LARGE_FILE_DELETE_LIMIT} large files from one scan."
+            ));
+        }
+
+        let mut seen = HashSet::new();
+        let mut targets = Vec::new();
+        let mut failed = Vec::new();
+        for path in paths {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let record = self.record_for(path)?.clone();
+            match self.validate_record(&record) {
+                Ok(canonical) => targets.push((record, canonical)),
+                Err(error) => failed.push(format!("{}: {error}", record.name)),
+            }
+        }
+
+        let mut removed_bytes = 0_u64;
+        let mut deleted_files = Vec::new();
+        for (record, canonical) in targets {
+            match fs::remove_file(&canonical) {
+                Ok(()) => {
+                    removed_bytes = removed_bytes.saturating_add(record.size_bytes);
+                    deleted_files.push(DeletedLargeFile {
+                        path: record.path.clone(),
+                        size_bytes: record.size_bytes,
+                    });
+                    self.files.remove(&record.path);
+                }
+                Err(error) => failed.push(format!(
+                    "{}: Windows could not delete it ({error}).",
+                    record.name
+                )),
+            }
+        }
+
+        Ok(LargeFileDeleteResult {
+            removed_bytes,
+            removed_files: deleted_files.len() as u64,
+            deleted_files,
+            failed,
+        })
+    }
+
+    pub(crate) fn remove_deleted(&mut self, deleted: &[(String, u64)]) {
+        for (path, _) in deleted {
+            self.files.remove(path);
+        }
+    }
+
+    fn record_for(&self, path: &str) -> Result<&LargeFile, String> {
+        if self.root.as_os_str().is_empty() {
+            return Err("Run a scan before working with large files.".to_string());
+        }
+        self.files.get(path).ok_or_else(|| {
+            "That file is not part of the current Large Files result. Run the scan again and retry."
+                .to_string()
+        })
+    }
+
+    fn validate_record(&self, record: &LargeFile) -> Result<PathBuf, String> {
+        let path = Path::new(&record.path);
+        let metadata = fs::symlink_metadata(path).map_err(|_| {
+            "It is no longer available. Run the scan again to refresh the list.".to_string()
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("It is no longer the regular file that Luna scanned.".to_string());
+        }
+        if metadata.len() != record.size_bytes {
+            return Err(
+                "Its size changed after the scan. Run the scan again before continuing."
+                    .to_string(),
+            );
+        }
+
+        let canonical = fs::canonicalize(path).map_err(|_| {
+            "Windows could not revalidate its location. Run the scan again.".to_string()
+        })?;
+        if !canonical.starts_with(&self.root) || canonical != path {
+            return Err(
+                "Its location changed after the scan. Run the scan again before continuing."
+                    .to_string(),
+            );
+        }
+        Ok(canonical)
     }
 }
 
@@ -653,7 +832,7 @@ fn find_duplicate_groups(
     duplicate_groups
 }
 
-fn hash_file(path: &Path) -> Result<String, String> {
+pub(crate) fn hash_file(path: &Path) -> Result<String, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut reader = BufReader::new(file);
     let mut hasher = Hasher::new();
@@ -1247,6 +1426,94 @@ mod tests {
         let bob_areas = index.areas_for(&bob.to_string_lossy()).unwrap();
         assert_eq!(bob_areas[0].name, "Files in this folder");
         assert!(!bob_areas[0].can_drill_down);
+    }
+
+    #[test]
+    fn storage_index_subtracts_a_deleted_file_at_every_level() {
+        let root = PathBuf::from("scan-root");
+        let file = root.join("Users").join("Alice").join("report.txt");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 86_400);
+        let mut accumulators = StorageAreaAccumulators::new();
+        accumulators.insert(root.clone(), HashMap::new());
+        record_storage_file(&root, &file, 70, Some(now), &mut accumulators);
+        let mut index = StorageIndex::from_accumulators(&root, accumulators, now);
+
+        index.remove_files(&[(file.to_string_lossy().to_string(), 70)]);
+
+        let root_areas = index.areas_for(&root.to_string_lossy()).unwrap();
+        assert_eq!(root_areas[0].size_bytes, 0);
+        assert_eq!(root_areas[0].file_count, 0);
+        let alice_areas = index
+            .areas_for(&root.join("Users").join("Alice").to_string_lossy())
+            .unwrap();
+        assert!(alice_areas.is_empty());
+    }
+
+    fn temporary_large_file_root(label: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "luna-large-file-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("current time")
+                .as_nanos()
+        ))
+    }
+
+    fn indexed_large_file(root: &Path, name: &str, bytes: &[u8]) -> (LargeFileIndex, String) {
+        fs::create_dir_all(root).expect("temporary scan root should be created");
+        let path = root.join(name);
+        fs::write(&path, bytes).expect("temporary large file should be written");
+        let canonical_root = fs::canonicalize(root).expect("scan root should be canonicalized");
+        let canonical_path = fs::canonicalize(&path).expect("large file should be canonicalized");
+        let display_path = canonical_path.to_string_lossy().to_string();
+        let record = LargeFile {
+            name: name.to_string(),
+            path: display_path.clone(),
+            size_bytes: bytes.len() as u64,
+            last_used_days: Some(12),
+            modified_at: None,
+        };
+        (
+            LargeFileIndex::from_scan(&canonical_root.to_string_lossy(), &[record]),
+            display_path,
+        )
+    }
+
+    #[test]
+    fn large_file_index_deletes_only_a_current_scan_entry() {
+        let root = temporary_large_file_root("delete");
+        let (mut index, path) = indexed_large_file(&root, "archive.bin", b"large-file");
+
+        let metadata = index.metadata_for(&path).unwrap();
+        assert_eq!(metadata.relative_path, "archive.bin");
+        assert!(
+            !metadata
+                .relative_path
+                .contains(&root.to_string_lossy().to_string())
+        );
+
+        let result = index.delete_files(std::slice::from_ref(&path)).unwrap();
+
+        assert_eq!(result.removed_files, 1);
+        assert_eq!(result.removed_bytes, 10);
+        assert!(!Path::new(&path).exists());
+        assert!(index.delete_files(&[path]).is_err());
+        fs::remove_dir_all(root).expect("temporary scan root should be removed");
+    }
+
+    #[test]
+    fn large_file_index_requires_a_rescan_when_size_changes() {
+        let root = temporary_large_file_root("changed");
+        let (mut index, path) = indexed_large_file(&root, "video.bin", b"original");
+        fs::write(&path, b"changed-size").expect("temporary large file should change");
+
+        let result = index.delete_files(std::slice::from_ref(&path)).unwrap();
+
+        assert_eq!(result.removed_files, 0);
+        assert_eq!(result.failed.len(), 1);
+        assert!(Path::new(&path).exists());
+        fs::remove_dir_all(root).expect("temporary scan root should be removed");
     }
 
     #[cfg(windows)]

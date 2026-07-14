@@ -1,4 +1,5 @@
 mod ai;
+mod duplicates;
 mod history;
 mod models;
 mod scanner;
@@ -6,7 +7,8 @@ mod schedule;
 mod settings;
 
 use models::{
-    CleanupRequest, CleanupResult, ScanProgress, ScanResult, ScanRootInfo, StorageCategory,
+    CleanupRequest, CleanupResult, DuplicateGroup, LargeFileDeleteRequest, LargeFileDeleteResult,
+    ScanProgress, ScanResult, ScanRootInfo, StorageCategory,
 };
 use serde::Serialize;
 use std::sync::{
@@ -24,6 +26,8 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 struct RuntimeState {
     scan_running: Arc<AtomicBool>,
     storage_index: Arc<RwLock<scanner::StorageIndex>>,
+    duplicate_groups: Arc<RwLock<Vec<DuplicateGroup>>>,
+    large_file_index: Arc<RwLock<scanner::LargeFileIndex>>,
     quitting: AtomicBool,
 }
 
@@ -105,6 +109,46 @@ async fn generate_ai_report(request: ai::AiReportRequest) -> Result<ai::AiReport
 }
 
 #[tauri::command]
+async fn assess_large_file(
+    state: State<'_, RuntimeState>,
+    path: String,
+) -> Result<ai::AiFileAssessmentEnvelope, String> {
+    let metadata = state
+        .large_file_index
+        .read()
+        .map_err(|_| "The large-file scan index is unavailable.".to_string())?
+        .metadata_for(&path)?;
+    ai::assess_large_file(ai::FileAssessmentContext {
+        name: metadata.name,
+        relative_path: metadata.relative_path,
+        extension: metadata.extension,
+        size_bytes: metadata.size_bytes,
+        last_used_days: metadata.last_used_days,
+        activity_at: metadata.activity_at,
+    })
+    .await
+}
+
+#[tauri::command]
+async fn review_duplicate_file(
+    state: State<'_, RuntimeState>,
+    request: ai::AiDuplicateReviewRequest,
+) -> Result<ai::AiDuplicateReviewEnvelope, String> {
+    let group = state
+        .duplicate_groups
+        .read()
+        .map_err(|_| "The duplicate scan index is unavailable.".to_string())?
+        .iter()
+        .find(|group| group.content_hash == request.content_hash)
+        .cloned()
+        .ok_or_else(|| {
+            "That duplicate group is no longer part of the latest scan. Scan again and retry."
+                .to_string()
+        })?;
+    ai::review_duplicate(request, group).await
+}
+
+#[tauri::command]
 async fn scan_path(
     app: AppHandle,
     state: State<'_, RuntimeState>,
@@ -112,13 +156,25 @@ async fn scan_path(
 ) -> Result<ScanResult, String> {
     let permit = acquire_scan(state.scan_running.clone())?;
     let storage_index = state.storage_index.clone();
+    let duplicate_groups = state.duplicate_groups.clone();
+    let large_file_index = state.large_file_index.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         let output = perform_scan(&app, &path, true)?;
+        let next_large_file_index =
+            scanner::LargeFileIndex::from_scan(&output.result.root, &output.result.large_files);
+        *duplicate_groups
+            .write()
+            .map_err(|_| "The duplicate scan index is unavailable.".to_string())? =
+            output.result.duplicate_groups.clone();
         *storage_index
             .write()
             .map_err(|_| "The storage explorer index is unavailable.".to_string())? =
             output.storage_index;
+        *large_file_index
+            .write()
+            .map_err(|_| "The large-file scan index is unavailable.".to_string())? =
+            next_large_file_index;
         Ok(output.result)
     })
     .await
@@ -209,6 +265,94 @@ async fn clean_items(request: CleanupRequest) -> Result<CleanupResult, String> {
     tauri::async_runtime::spawn_blocking(move || scanner::clean_items(&request.item_ids))
         .await
         .map_err(|error| format!("The cleanup worker stopped unexpectedly: {error}"))
+}
+
+#[tauri::command]
+async fn delete_large_files(
+    state: State<'_, RuntimeState>,
+    request: LargeFileDeleteRequest,
+) -> Result<LargeFileDeleteResult, String> {
+    let permit = acquire_scan(state.scan_running.clone())?;
+    let large_file_index = state.large_file_index.clone();
+    let duplicate_groups = state.duplicate_groups.clone();
+    let storage_index = state.storage_index.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let result = large_file_index
+            .write()
+            .map_err(|_| "The large-file scan index is unavailable.".to_string())?
+            .delete_files(&request.paths)?;
+        if !result.deleted_files.is_empty() {
+            let deleted = result
+                .deleted_files
+                .iter()
+                .map(|file| (file.path.clone(), file.size_bytes))
+                .collect::<Vec<_>>();
+            storage_index
+                .write()
+                .map_err(|_| "The storage explorer index is unavailable.".to_string())?
+                .remove_files(&deleted);
+
+            let deleted_paths = result
+                .deleted_files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            let mut groups = duplicate_groups
+                .write()
+                .map_err(|_| "The duplicate scan index is unavailable.".to_string())?;
+            for group in groups.iter_mut() {
+                group
+                    .files
+                    .retain(|file| !deleted_paths.contains(file.path.as_str()));
+                group.reclaimable_bytes = group
+                    .size_bytes
+                    .saturating_mul(group.files.len().saturating_sub(1) as u64);
+            }
+            groups.retain(|group| group.files.len() > 1);
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|error| format!("The large-file deletion worker stopped unexpectedly: {error}"))?
+}
+
+#[tauri::command]
+async fn delete_duplicate_files(
+    state: State<'_, RuntimeState>,
+    request: duplicates::DuplicateDeleteRequest,
+) -> Result<duplicates::DuplicateDeleteResult, String> {
+    let permit = acquire_scan(state.scan_running.clone())?;
+    let duplicate_groups = state.duplicate_groups.clone();
+    let storage_index = state.storage_index.clone();
+    let large_file_index = state.large_file_index.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let result = {
+            let mut groups = duplicate_groups
+                .write()
+                .map_err(|_| "The duplicate scan index is unavailable.".to_string())?;
+            duplicates::delete_files(&mut groups, request)?
+        };
+        if !result.deleted_files.is_empty() {
+            let deleted = result
+                .deleted_files
+                .iter()
+                .map(|file| (file.path.clone(), file.size_bytes))
+                .collect::<Vec<_>>();
+            storage_index
+                .write()
+                .map_err(|_| "The storage explorer index is unavailable.".to_string())?
+                .remove_files(&deleted);
+            large_file_index
+                .write()
+                .map_err(|_| "The large-file scan index is unavailable.".to_string())?
+                .remove_deleted(&deleted);
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|error| format!("The duplicate cleanup worker stopped unexpectedly: {error}"))?
 }
 
 fn acquire_scan(flag: Arc<AtomicBool>) -> Result<ScanPermit, String> {
@@ -443,6 +587,8 @@ pub fn run() {
             scan_path,
             list_storage_areas,
             clean_items,
+            delete_large_files,
+            delete_duplicate_files,
             get_trend_history,
             clear_trend_history,
             delete_trend_snapshot,
@@ -450,6 +596,8 @@ pub fn run() {
             save_api_key,
             delete_api_key,
             generate_ai_report,
+            assess_large_file,
+            review_duplicate_file,
             get_schedule_status,
             update_schedule,
             update_default_scan_root,

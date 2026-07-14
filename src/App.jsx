@@ -223,6 +223,129 @@ function buildReportContext(scanResult, trendHistory, cleanupItems) {
   };
 }
 
+function normalizeWindowsPath(path) {
+  return path.replaceAll("/", "\\").replace(/\\+$/, "").toLowerCase();
+}
+
+function categoryContainsFile(categoryPath, rootPath, filePath) {
+  const category = normalizeWindowsPath(categoryPath);
+  const root = normalizeWindowsPath(rootPath);
+  const file = normalizeWindowsPath(filePath);
+  if (category === root) return file.slice(0, file.lastIndexOf("\\")) === root;
+  return file.startsWith(`${category}\\`);
+}
+
+function subtractAgeBytes(ageBuckets, lastUsedDays, sizeBytes) {
+  const next = { ...ageBuckets };
+  const key = lastUsedDays == null
+    ? "unknownBytes"
+    : lastUsedDays <= 30
+      ? "recentBytes"
+      : lastUsedDays <= 90
+        ? "inactive30To90Bytes"
+        : lastUsedDays <= 180
+          ? "inactive90To180Bytes"
+          : "inactive180PlusBytes";
+  next[key] = Math.max(0, (next[key] || 0) - sizeBytes);
+  return next;
+}
+
+function applyDuplicateDeletion(scanResult, deletedFiles) {
+  if (!scanResult || !deletedFiles.length) return scanResult;
+  const deletedPaths = new Set(deletedFiles.map((file) => file.path));
+  const deletedDetails = scanResult.duplicateGroups.flatMap((group) => group.files
+    .filter((file) => deletedPaths.has(file.path))
+    .map((file) => ({ ...file, sizeBytes: group.sizeBytes })));
+  const removedBytes = deletedFiles.reduce((total, file) => total + file.sizeBytes, 0);
+  const duplicateGroups = scanResult.duplicateGroups
+    .map((group) => {
+      const files = group.files.filter((file) => !deletedPaths.has(file.path));
+      return {
+        ...group,
+        files,
+        reclaimableBytes: group.sizeBytes * Math.max(files.length - 1, 0),
+      };
+    })
+    .filter((group) => group.files.length > 1);
+  const duplicateBytes = duplicateGroups.reduce((total, group) => total + group.reclaimableBytes, 0);
+  const duplicateFileCount = duplicateGroups.reduce((total, group) => total + Math.max(group.files.length - 1, 0), 0);
+  const cleanupItems = scanResult.cleanupItems.map((item) => item.id === "duplicate-files" ? {
+    ...item,
+    sizeBytes: duplicateBytes,
+    fileCount: duplicateFileCount,
+    evidenceCount: duplicateGroups.length,
+  } : item);
+  const categories = scanResult.categories.map((category) => {
+    const removed = deletedDetails.filter((file) => categoryContainsFile(category.path, scanResult.root, file.path));
+    return removed.reduce((next, file) => ({
+      ...next,
+      sizeBytes: Math.max(0, next.sizeBytes - file.sizeBytes),
+      fileCount: Math.max(0, next.fileCount - 1),
+    }), category);
+  });
+  const ageBuckets = deletedDetails.reduce(
+    (buckets, file) => subtractAgeBytes(buckets, file.lastUsedDays, file.sizeBytes),
+    scanResult.ageBuckets,
+  );
+
+  return {
+    ...scanResult,
+    totalBytes: Math.max(0, scanResult.totalBytes - removedBytes),
+    driveUsedBytes: scanResult.driveUsedBytes == null ? null : Math.max(0, scanResult.driveUsedBytes - removedBytes),
+    fileCount: Math.max(0, scanResult.fileCount - deletedFiles.length),
+    categories,
+    largeFiles: scanResult.largeFiles.filter((file) => !deletedPaths.has(file.path)),
+    duplicateGroups,
+    cleanupItems,
+    ageBuckets,
+  };
+}
+
+function applyLargeFileDeletion(scanResult, deletedFiles) {
+  if (!scanResult || !deletedFiles.length) return scanResult;
+  const deletedPaths = new Set(deletedFiles.map((file) => file.path));
+  const deletedDetails = scanResult.largeFiles.filter((file) => deletedPaths.has(file.path));
+  const removedBytes = deletedFiles.reduce((total, file) => total + file.sizeBytes, 0);
+  const duplicateGroups = scanResult.duplicateGroups
+    .map((group) => {
+      const files = group.files.filter((file) => !deletedPaths.has(file.path));
+      return { ...group, files, reclaimableBytes: group.sizeBytes * Math.max(files.length - 1, 0) };
+    })
+    .filter((group) => group.files.length > 1);
+  const duplicateBytes = duplicateGroups.reduce((total, group) => total + group.reclaimableBytes, 0);
+  const duplicateFileCount = duplicateGroups.reduce((total, group) => total + Math.max(group.files.length - 1, 0), 0);
+  const cleanupItems = scanResult.cleanupItems.map((item) => item.id === "duplicate-files" ? {
+    ...item,
+    sizeBytes: duplicateBytes,
+    fileCount: duplicateFileCount,
+    evidenceCount: duplicateGroups.length,
+  } : item);
+  const categories = scanResult.categories.map((category) => {
+    const removed = deletedDetails.filter((file) => categoryContainsFile(category.path, scanResult.root, file.path));
+    return removed.reduce((next, file) => ({
+      ...next,
+      sizeBytes: Math.max(0, next.sizeBytes - file.sizeBytes),
+      fileCount: Math.max(0, next.fileCount - 1),
+    }), category);
+  });
+  const ageBuckets = deletedDetails.reduce(
+    (buckets, file) => subtractAgeBytes(buckets, file.lastUsedDays, file.sizeBytes),
+    scanResult.ageBuckets,
+  );
+
+  return {
+    ...scanResult,
+    totalBytes: Math.max(0, scanResult.totalBytes - removedBytes),
+    driveUsedBytes: scanResult.driveUsedBytes == null ? null : Math.max(0, scanResult.driveUsedBytes - removedBytes),
+    fileCount: Math.max(0, scanResult.fileCount - deletedFiles.length),
+    categories,
+    largeFiles: scanResult.largeFiles.filter((file) => !deletedPaths.has(file.path)),
+    duplicateGroups,
+    cleanupItems,
+    ageBuckets,
+  };
+}
+
 function NavItem({ item, active, onClick }) {
   const Icon = item.icon;
   return (
@@ -783,6 +906,125 @@ export function App() {
     }
   }
 
+  async function deleteDuplicateFiles(request) {
+    let outcome;
+    if (!isTauri) {
+      const selected = request.groups.flatMap((group) => group.paths.map((path) => {
+        const source = scanResult?.duplicateGroups
+          .find((candidate) => candidate.contentHash === group.contentHash);
+        return { path, contentHash: group.contentHash, sizeBytes: source?.sizeBytes || 0 };
+      }));
+      outcome = { deletedFiles: selected, removedBytes: selected.reduce((total, file) => total + file.sizeBytes, 0), failures: [] };
+    } else {
+      outcome = await invoke("delete_duplicate_files", { request });
+    }
+
+    if (outcome.deletedFiles.length > 0) {
+      const updated = applyDuplicateDeletion(scanResult, outcome.deletedFiles);
+      setScanResult(updated);
+      const duplicateItem = updated.cleanupItems.find((item) => item.id === "duplicate-files");
+      if (duplicateItem) {
+        setItems((current) => current.map((item) => item.id === "duplicate-files"
+          ? { ...item, ...mapCleanupItem(duplicateItem), selected: false }
+          : item));
+      }
+      setAiReport(null);
+      const failureNote = outcome.failures.length ? ` ${outcome.failures.length} stayed untouched.` : "";
+      setToast(`Deleted ${outcome.deletedFiles.length.toLocaleString()} verified ${outcome.deletedFiles.length === 1 ? "copy" : "copies"} · ${formatBytes(outcome.removedBytes)}.${failureNote}`);
+    } else if (outcome.failures.length > 0) {
+      setToast(`No files were deleted. ${outcome.failures[0].reason}`);
+    }
+    return outcome;
+  }
+
+  async function askAiAboutDuplicate(request) {
+    if (!isTauri) {
+      return {
+        model: "gpt-5.6-luna",
+        generatedAt: new Date().toISOString(),
+        responseId: "preview-duplicate-review",
+        review: {
+          recommendation: "review",
+          headline: "Keep the better-organized copy until its role is clear",
+          summary: "The matching hash proves another byte-identical copy existed at scan time, but metadata alone cannot show whether this location belongs to an app, sync workflow, backup, or active project.",
+          riskLevel: "moderate",
+          confidence: "medium",
+          reasons: ["The contents matched another scanned file exactly.", "A file location can still matter to applications and workflows."],
+          suggestions: ["Keep the copy in the location you recognize and use.", "If neither location is clear, move one copy to an archive before deleting it."],
+        },
+      };
+    }
+    if (!aiStatus.configured) {
+      setActiveNav("settings");
+      setToast("Add an OpenAI API key in Settings before asking Luna about a duplicate.");
+      throw new Error("An OpenAI API key is required. Luna opened Settings for you.");
+    }
+    const envelope = await invoke("review_duplicate_file", { request });
+    setToast(`AI duplicate review ready · ${envelope.model}`);
+    return envelope;
+  }
+
+  async function deleteLargeFiles(paths) {
+    let outcome;
+    if (!isTauri) {
+      const selected = (scanResult?.largeFiles || [])
+        .filter((file) => paths.includes(file.path))
+        .map((file) => ({ path: file.path, sizeBytes: file.sizeBytes }));
+      outcome = {
+        deletedFiles: selected,
+        removedBytes: selected.reduce((total, file) => total + file.sizeBytes, 0),
+        removedFiles: selected.length,
+        failed: [],
+      };
+    } else {
+      outcome = await invoke("delete_large_files", { request: { paths } });
+    }
+
+    if (outcome.deletedFiles.length > 0) {
+      const updated = applyLargeFileDeletion(scanResult, outcome.deletedFiles);
+      setScanResult(updated);
+      const duplicateItem = updated.cleanupItems.find((item) => item.id === "duplicate-files");
+      if (duplicateItem) {
+        setItems((current) => current.map((item) => item.id === "duplicate-files"
+          ? { ...item, ...mapCleanupItem(duplicateItem), selected: false }
+          : item));
+      }
+      setAiReport(null);
+      const failureNote = outcome.failed.length ? ` ${outcome.failed.length} stayed untouched.` : "";
+      setToast(`Permanently deleted ${outcome.deletedFiles.length.toLocaleString()} large ${outcome.deletedFiles.length === 1 ? "file" : "files"} · ${formatBytes(outcome.removedBytes)}.${failureNote}`);
+    } else if (outcome.failed.length > 0) {
+      setToast(`No files were deleted. ${outcome.failed[0]}`);
+    }
+    return outcome;
+  }
+
+  async function askAiAboutLargeFile(file) {
+    if (!isTauri) {
+      return {
+        model: "gpt-5.6-luna",
+        generatedAt: new Date().toISOString(),
+        responseId: "preview-large-file-assessment",
+        assessment: {
+          verdict: "review",
+          confidence: "medium",
+          headline: "Confirm what owns this file before deleting it",
+          explanation: "Its size makes it worth reviewing, but a name, location, and activity timestamp cannot prove that it is disposable or backed up.",
+          signals: ["The file has a large storage footprint.", "Luna has not opened the contents or checked application dependencies."],
+          suggestions: ["Open the file or its containing folder and confirm what created it.", "Make sure another copy or backup exists, or move it to archive storage first."],
+          caution: "Metadata can be incomplete. Keep the file if its purpose or recoverability is uncertain.",
+        },
+      };
+    }
+    if (!aiStatus.configured) {
+      setActiveNav("settings");
+      setToast("Add an OpenAI API key in Settings before asking Luna about a large file.");
+      throw new Error("An OpenAI API key is required. Luna opened Settings for you.");
+    }
+    const envelope = await invoke("assess_large_file", { path: file.path });
+    setToast(`AI file opinion ready · ${envelope.model}`);
+    return envelope;
+  }
+
   async function runAiInvestigation(userQuestion = "") {
     if (!isTauri) {
       setAiReport(previewAiReport);
@@ -838,8 +1080,8 @@ export function App() {
     overview: <OverviewView {...viewProps} />,
     scan: <ScanResultsView {...viewProps} />,
     storage: <StorageView {...viewProps} onLoadAreas={loadStorageAreas} />,
-    duplicates: <DuplicatesView {...viewProps} />,
-    large: <LargeFilesView {...viewProps} />,
+    duplicates: <DuplicatesView {...viewProps} onDeleteFiles={deleteDuplicateFiles} onAskAi={askAiAboutDuplicate} />,
+    large: <LargeFilesView {...viewProps} onDeleteFiles={deleteLargeFiles} onAskAi={askAiAboutLargeFile} />,
     schedule: (
       <ScheduleView
         schedule={scheduleStatus}

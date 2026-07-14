@@ -19,6 +19,8 @@ import {
   Warning24Regular,
 } from "@fluentui/react-icons";
 import { formatBytes, formatCount, formatDateTime, formatDuration, formatScanProgressSize, formatScanSize, getScanUsage } from "../lib/format.js";
+import { DuplicateFilesPanel } from "./DuplicateFilesPanel.jsx";
+import { LargeFilesPanel } from "./LargeFilesPanel.jsx";
 
 function EmptyScan({ onScan, onChooseFolder }) {
   return (
@@ -278,36 +280,19 @@ export function StorageView({ result, scanning, progress, onScan, onChooseFolder
   );
 }
 
-export function DuplicatesView({ result, scanning, progress, onScan, onChooseFolder }) {
+export function DuplicatesView({ result, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
-  const reclaimable = result.duplicateGroups.reduce((sum, group) => sum + group.reclaimableBytes, 0);
-  return (
-    <div className="feature-view">
-      <FeatureHeader eyebrow="Duplicates" title={`${formatBytes(reclaimable)} in exact copies`} description="Luna compares size first, then BLAKE3 content hashes. No duplicate is selected for deletion automatically." action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Scan another folder</button>} />
-      {result.duplicateGroups.length === 0 ? <section className="empty-state-surface"><DocumentCopy24Regular /><h2>No exact duplicates in this scan</h2><p>Try a broader folder or drive if you want to search elsewhere.</p></section> : (
-        <section className="feature-surface duplicate-list">
-          {result.duplicateGroups.map((group, index) => (
-            <details key={group.contentHash} open={index === 0}>
-              <summary><span><DocumentCopy24Regular /></span><div><strong>{group.files[0]?.name || "Duplicate group"}</strong><small>{group.files.length} identical files · hash {group.contentHash.slice(0, 12)}…</small></div><b>{formatBytes(group.reclaimableBytes)} reclaimable</b></summary>
-              <div>{group.files.map((file) => <div className="duplicate-file" key={file.path}><span>{file.path}</span><small>{file.lastUsedDays == null ? "Activity unknown" : `${file.lastUsedDays} days ago`}</small></div>)}</div>
-            </details>
-          ))}
-        </section>
-      )}
-    </div>
-  );
+  return <DuplicateFilesPanel result={result} onChooseFolder={onChooseFolder} onDeleteFiles={onDeleteFiles} onAskAi={onAskAi} />;
 }
 
-export function LargeFilesView({ result, scanning, progress, onScan, onChooseFolder }) {
+export function LargeFilesView({ result, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
   return (
     <div className="feature-view">
-      <FeatureHeader eyebrow="Large files" title="The files with the biggest footprint" description="Sorted by size. Luna shows these for investigation only and never preselects them for cleanup." action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Choose another folder</button>} />
-      <section className="feature-surface large-file-table">
-        <div className="data-table"><div className="data-header"><span>File</span><span>Size</span><span>Activity</span></div>{result.largeFiles.map((file) => <div className="data-row" key={file.path}><div className="path-cell"><Folder24Regular /><span><strong>{file.name}</strong><small>{file.path}</small></span></div><strong>{formatBytes(file.sizeBytes)}</strong><span>{file.lastUsedDays == null ? "Unknown" : `${file.lastUsedDays} days ago`}</span></div>)}</div>
-      </section>
+      <FeatureHeader eyebrow="Large files" title="The files with the biggest footprint" description="Select files when you want to remove them, or ask Luna for a cautious metadata-only opinion first. Nothing is preselected." action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Choose another folder</button>} />
+      <LargeFilesPanel result={result} onDeleteFiles={onDeleteFiles} onAskAi={onAskAi} />
     </div>
   );
 }

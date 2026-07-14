@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0] - 2026-07-14
+
+### Added
+
+- Select exact duplicate copies for confirmed deletion while always keeping at least one verified copy in each group.
+- Ask GPT-5.6-Luna for a structured, metadata-only opinion on any duplicate copy or Large Files entry, including risk, confidence, evidence, and preservation-first suggestions.
+- Select one or more entries in Large files and permanently delete them after an explicit warning and confirmation.
+
+### Changed
+
+- Revalidate every file against the latest scan before removal; duplicate copies are re-hashed, and large files must remain regular files at the scanned location and size.
+- Refresh storage totals, age cohorts, duplicate opportunity, cleanup evidence, and the Large Files list after file-level deletion.
+
 ## [0.11.0] - 2026-07-14
 
 ### Added

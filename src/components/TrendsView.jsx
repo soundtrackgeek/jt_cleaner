@@ -16,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { formatBytes, formatCount } from "../lib/format.js";
+import { formatBytes, formatCount, formatScanProgressSize } from "../lib/format.js";
 
 const palette = ["#8577ff", "#55d8b0", "#efb74b", "#62a9e8", "#db7d9f"];
 const ageRows = [
@@ -109,7 +109,7 @@ function EmptyTrends({ onCapture, scanning, progress }) {
           <p>{scanning ? "CAPTURING SNAPSHOT" : "STORAGE TRENDS"}</p>
           <h1>{scanning ? "Scanning your storage now…" : "Your storage story starts with one scan."}</h1>
           <p>{scanning
-            ? `${formatCount(progress?.scannedFiles || 0)} files measured · ${formatBytes(progress?.scannedBytes || 0)}. Keep Luna open while this snapshot finishes.`
+            ? `${formatCount(progress?.scannedFiles || 0)} files measured · ${formatScanProgressSize(progress)}. Keep Luna open while this snapshot finishes.`
             : "Luna stores compact totals and category summaries—never a second copy of your files."}</p>
           <button className="primary-button" type="button" disabled={scanning} onClick={onCapture}>
             {scanning ? "Capturing…" : "Capture the first snapshot"}

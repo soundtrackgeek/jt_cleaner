@@ -16,6 +16,8 @@ pub struct ScanRootInfo {
 pub struct ScanProgress {
     pub scanned_files: u64,
     pub scanned_bytes: u64,
+    pub drive_total_bytes: Option<u64>,
+    pub drive_used_bytes: Option<u64>,
     pub current_path: String,
 }
 

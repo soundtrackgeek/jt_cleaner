@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.1] - 2026-07-14
+
+### Fixed
+
+- Live whole-drive scan and trend-capture progress now shows Windows-reported used space and total capacity instead of the logical file-length sum, which could exceed the drive's capacity before the scan completed.
+
 ## [0.7.0] - 2026-07-14
 
 ### Added

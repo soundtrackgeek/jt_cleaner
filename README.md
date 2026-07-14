@@ -4,13 +4,13 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.7.0` remembers the main window's last position, size, and maximized state. The same geometry is restored after reopening from the tray, restarting Luna, or relaunching into an installed update, while unavailable monitor layouts fall back to Windows placement.
+Version `0.7.1` makes live whole-drive scan progress match the completed result. While scanning a drive, Luna now shows Windows-reported used space and total capacity instead of a logical file-length sum that can overcount NTFS hard links.
 
 ### Included
 
 - Responsive Windows 11 Fluent-style cleanup review plus Overview, Scan results, Trends, Storage explorer, Duplicates, Large files, Schedule, and Settings surfaces.
 - Folder and drive discovery with native directory selection.
-- Streaming scan progress from the Rust worker.
+- Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
 - Top-level storage aggregation, large-file ranking, and activity-age buckets.
 - Windows-reported used space and total capacity for whole-drive scan summaries and trend snapshots.
 - Exact duplicate detection using size grouping followed by BLAKE3 content hashes.
@@ -19,7 +19,7 @@ Version `0.7.0` remembers the main window's last position, size, and maximized s
 - Native cleanup for known cache roots; old Downloads and duplicates remain review-only.
 - Storage composition over time with a stacked category chart, fastest-mover ranking, age-cohort heatmap, and a local narrative summary.
 - Per-drive aggregate snapshots containing category totals, age buckets, cleanup signals, and duplicate opportunity—never file contents or a duplicate inventory.
-- Immediate Trends capture feedback with measured file and byte totals while the snapshot scan is running.
+- Immediate Trends capture feedback with measured file progress plus Windows drive usage or scanned folder bytes while the snapshot scan is running.
 - Same-day snapshot replacement and a 104-snapshot cap per drive, covering roughly two years of weekly history.
 - Native system tray with **Open Luna Clean**, **Capture storage snapshot**, and **Quit Luna Clean** actions.
 - Optional startup with Windows using a hidden `--hidden` launch path.

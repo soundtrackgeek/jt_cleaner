@@ -28,6 +28,14 @@ export function formatScanSize(result) {
     : formatBytes(usage.usedBytes);
 }
 
+export function formatScanProgressSize(progress) {
+  return formatScanSize({
+    totalBytes: progress?.scannedBytes || 0,
+    driveTotalBytes: progress?.driveTotalBytes,
+    driveUsedBytes: progress?.driveUsedBytes,
+  });
+}
+
 export function formatCount(value = 0) {
   return new Intl.NumberFormat().format(value);
 }

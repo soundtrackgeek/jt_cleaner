@@ -153,6 +153,21 @@ fn paths_refer_to_same_location(left: &Path, right: &Path) -> bool {
     }
 }
 
+fn scan_progress(
+    scanned_files: u64,
+    scanned_bytes: u64,
+    current_path: &Path,
+    volume_space: Option<VolumeSpace>,
+) -> ScanProgress {
+    ScanProgress {
+        scanned_files,
+        scanned_bytes,
+        drive_total_bytes: volume_space.map(|space| space.total_bytes),
+        drive_used_bytes: volume_space.map(VolumeSpace::used_bytes),
+        current_path: current_path.to_string_lossy().to_string(),
+    }
+}
+
 pub fn scan_path<F>(requested_path: &str, mut on_progress: F) -> Result<ScanResult, String>
 where
     F: FnMut(ScanProgress),
@@ -164,6 +179,9 @@ where
     if !root.is_dir() {
         return Err("Choose a folder or drive to scan.".to_string());
     }
+
+    let progress_volume_space = volume_space_for_root(&root);
+    on_progress(scan_progress(0, 0, &root, progress_volume_space));
 
     let now = SystemTime::now();
     let mut total_bytes = 0_u64;
@@ -252,11 +270,12 @@ where
         }
 
         if file_count.is_multiple_of(1_000) {
-            on_progress(ScanProgress {
-                scanned_files: file_count,
-                scanned_bytes: total_bytes,
-                current_path: entry.path().to_string_lossy().to_string(),
-            });
+            on_progress(scan_progress(
+                file_count,
+                total_bytes,
+                entry.path(),
+                progress_volume_space,
+            ));
         }
     }
 
@@ -299,11 +318,12 @@ where
         .collect();
     large_files.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
 
-    on_progress(ScanProgress {
-        scanned_files: file_count,
-        scanned_bytes: total_bytes,
-        current_path: root.to_string_lossy().to_string(),
-    });
+    on_progress(scan_progress(
+        file_count,
+        total_bytes,
+        &root,
+        progress_volume_space,
+    ));
 
     let root_name = root
         .file_name()
@@ -1036,6 +1056,23 @@ mod tests {
             volume_space_from_mounts(Path::new("definitely-not-the-root"), mounts),
             None
         );
+    }
+
+    #[test]
+    fn drive_progress_reports_volume_usage_instead_of_logical_bytes() {
+        let progress = scan_progress(
+            1_337_000,
+            706,
+            Path::new("test-volume"),
+            Some(VolumeSpace {
+                total_bytes: 475,
+                available_bytes: 41,
+            }),
+        );
+
+        assert_eq!(progress.scanned_bytes, 706);
+        assert_eq!(progress.drive_total_bytes, Some(475));
+        assert_eq!(progress.drive_used_bytes, Some(434));
     }
 
     #[cfg(windows)]

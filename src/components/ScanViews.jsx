@@ -16,7 +16,7 @@ import {
   Sparkle24Regular,
   Warning24Regular,
 } from "@fluentui/react-icons";
-import { formatBytes, formatCount, formatDateTime, formatDuration, formatScanSize, getScanUsage } from "../lib/format.js";
+import { formatBytes, formatCount, formatDateTime, formatDuration, formatScanProgressSize, formatScanSize, getScanUsage } from "../lib/format.js";
 
 function EmptyScan({ onScan, onChooseFolder }) {
   return (
@@ -52,7 +52,7 @@ function ScanProgress({ progress }) {
       <div>
         <h2>Reading storage metadata…</h2>
         <p>{progress?.currentPath || "Preparing the scan"}</p>
-        <span>{formatCount(progress?.scannedFiles || 0)} files · {formatBytes(progress?.scannedBytes || 0)}</span>
+        <span>{formatCount(progress?.scannedFiles || 0)} files · {formatScanProgressSize(progress)}</span>
       </div>
       <div className="indeterminate-track"><i /></div>
     </section>

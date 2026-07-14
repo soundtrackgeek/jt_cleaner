@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowSync24Regular,
   Broom24Regular,
@@ -24,6 +26,16 @@ import {
   Warning24Regular,
 } from "@fluentui/react-icons";
 import lunaMark from "./assets/luna-clean.png";
+import {
+  DuplicatesView,
+  LargeFilesView,
+  OverviewView,
+  ScanResultsView,
+  ScheduleView,
+  SettingsView,
+  StorageView,
+} from "./components/ScanViews.jsx";
+import { formatBytes, formatDateTime } from "./lib/format.js";
 
 const navigation = [
   { id: "overview", label: "Overview", icon: Home24Regular },
@@ -123,6 +135,25 @@ const findings = [
 
 function formatSize(value) {
   return `${value.toFixed(1)} GB`;
+}
+
+const cleanupIcons = {
+  "browser-cache": Search24Regular,
+  "codex-cache": Broom24Regular,
+  "temp-files": Delete24Regular,
+  "duplicate-files": DocumentCopy24Regular,
+  "old-downloads": Delete24Regular,
+};
+
+function mapCleanupItem(item) {
+  return {
+    ...item,
+    size: item.sizeBytes / 1024 ** 3,
+    age: item.lastUsedDays ?? 0,
+    date: item.lastUsedAt ? formatDateTime(item.lastUsedAt) : "Activity unknown",
+    selected: item.selectedByDefault,
+    icon: cleanupIcons[item.id] || Document24Regular,
+  };
 }
 
 function NavItem({ item, active, onClick }) {
@@ -240,7 +271,7 @@ function CleanupGroup({ title, description, kind, items, expandedId, onExpand, o
   );
 }
 
-function ConfirmDialog({ count, size, onCancel, onConfirm }) {
+function ConfirmDialog({ count, size, busy, onCancel, onConfirm }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
       <section
@@ -265,8 +296,8 @@ function ConfirmDialog({ count, size, onCancel, onConfirm }) {
           Known cache paths only. Personal settings are excluded.
         </div>
         <div className="dialog-actions">
-          <button className="secondary-button" type="button" onClick={onCancel}>Keep reviewing</button>
-          <button className="primary-button" type="button" onClick={onConfirm}>Clean selected files</button>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={busy}>Keep reviewing</button>
+          <button className="primary-button" type="button" onClick={onConfirm} disabled={busy}>{busy ? "Cleaning safely…" : "Clean selected files"}</button>
         </div>
       </section>
     </div>
@@ -274,27 +305,56 @@ function ConfirmDialog({ count, size, onCancel, onConfirm }) {
 }
 
 export function App() {
+  const isTauri = Boolean(window.__TAURI_INTERNALS__);
   const [items, setItems] = useState(initialItems);
   const [expandedId, setExpandedId] = useState("browser-cache");
   const [activeNav, setActiveNav] = useState("cleanup");
   const [confirming, setConfirming] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.1.0");
+  const [appVersion, setAppVersion] = useState("0.2.0");
+  const [scanRoots, setScanRoots] = useState([]);
+  const [selectedRoot, setSelectedRoot] = useState("");
+  const [scanResult, setScanResult] = useState(null);
+  const [scanProgress, setScanProgress] = useState(null);
+  const [scanError, setScanError] = useState("");
+  const [scanning, setScanning] = useState(false);
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
   const selectedSize = useMemo(
     () => selectedItems.reduce((sum, item) => sum + item.size, 0),
     [selectedItems],
   );
+  const cleanupTotal = useMemo(
+    () => items.reduce((sum, item) => sum + item.size, 0),
+    [items],
+  );
+  const currentRoot = useMemo(
+    () => scanRoots.find((root) => root.path === selectedRoot) || scanRoots.find((root) => root.kind !== "home"),
+    [scanRoots, selectedRoot],
+  );
 
   useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return;
-    invoke("app_status")
-      .then((status) => setAppVersion(status.version))
+    if (!isTauri) return;
+    Promise.all([invoke("app_status"), invoke("list_scan_roots")])
+      .then(([status, roots]) => {
+        setAppVersion(status.version);
+        setScanRoots(roots);
+        setSelectedRoot(status.defaultScanRoot || roots[0]?.path || "");
+      })
       .catch(() => undefined);
-  }, []);
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return undefined;
+    let stopListening;
+    listen("scan-progress", (event) => setScanProgress(event.payload)).then((unlisten) => {
+      stopListening = unlisten;
+    });
+    return () => stopListening?.();
+  }, [isTauri]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -308,12 +368,73 @@ export function App() {
     );
   }
 
-  function completePreviewCleanup() {
+  async function runScan(path = selectedRoot) {
+    if (!isTauri) {
+      setToast("Run Luna Clean with “npm run tauri dev” to scan the local file system.");
+      return;
+    }
+    if (!path) {
+      setScanError("Choose a folder or drive first.");
+      return;
+    }
+    setScanning(true);
+    setScanError("");
+    setScanProgress({ scannedFiles: 0, scannedBytes: 0, currentPath: path });
+    try {
+      const result = await invoke("scan_path", { path });
+      setScanResult(result);
+      setSelectedRoot(path);
+      setItems(result.cleanupItems.map(mapCleanupItem));
+      setExpandedId(result.cleanupItems.find((item) => item.sizeBytes > 0)?.id || "");
+      setToast(`Scan complete — ${formatBytes(result.totalBytes)} across ${result.fileCount.toLocaleString()} files.`);
+    } catch (error) {
+      setScanError(String(error));
+      setToast(`Scan stopped: ${String(error)}`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function chooseScanFolder() {
+    if (!isTauri) {
+      setToast("Folder selection is available in the native Tauri app.");
+      return;
+    }
+    const selection = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose a folder or drive to scan",
+      defaultPath: selectedRoot || undefined,
+    });
+    if (typeof selection === "string") {
+      setSelectedRoot(selection);
+      await runScan(selection);
+    }
+  }
+
+  async function completeCleanup() {
     const count = selectedItems.length;
     const size = selectedSize;
-    setConfirming(false);
-    setItems((current) => current.map((item) => ({ ...item, selected: false })));
-    setToast(`Cleanup preview complete — ${formatSize(size)} across ${count} items is ready for the Rust engine.`);
+    if (!isTauri) {
+      setConfirming(false);
+      setItems((current) => current.map((item) => ({ ...item, selected: false })));
+      setToast(`Cleanup preview complete — ${formatSize(size)} across ${count} items.`);
+      return;
+    }
+    setCleaning(true);
+    try {
+      const result = await invoke("clean_items", {
+        request: { itemIds: selectedItems.map((item) => item.id) },
+      });
+      setItems((current) => current.map((item) => ({ ...item, selected: false })));
+      const skipped = result.skipped.length ? ` ${result.skipped.length} review item(s) stayed untouched.` : "";
+      setToast(`Removed ${formatBytes(result.removedBytes)} from ${result.removedFiles.toLocaleString()} files.${skipped}`);
+      setConfirming(false);
+    } catch (error) {
+      setToast(`Cleanup stopped safely: ${String(error)}`);
+    } finally {
+      setCleaning(false);
+    }
   }
 
   function submitQuestion(event) {
@@ -326,9 +447,70 @@ export function App() {
 
   const safeItems = items.filter((item) => item.group === "safe");
   const reviewItems = items.filter((item) => item.group === "review");
+  const viewProps = {
+    result: scanResult,
+    scanning,
+    progress: scanProgress,
+    error: scanError,
+    onScan: () => runScan(),
+    onChooseFolder: chooseScanFolder,
+  };
+  const featureViews = {
+    overview: <OverviewView {...viewProps} />,
+    scan: <ScanResultsView {...viewProps} />,
+    storage: <StorageView {...viewProps} />,
+    duplicates: <DuplicatesView {...viewProps} />,
+    large: <LargeFilesView {...viewProps} />,
+    schedule: <ScheduleView />,
+    settings: (
+      <SettingsView
+        roots={scanRoots}
+        selectedRoot={selectedRoot}
+        onRootChange={setSelectedRoot}
+        onScan={() => runScan()}
+        onChooseFolder={chooseScanFolder}
+      />
+    ),
+  };
+  const usedPercent = currentRoot?.totalBytes
+    ? ((currentRoot.totalBytes - currentRoot.availableBytes) / currentRoot.totalBytes) * 100
+    : 62;
+  const liveFindings = scanResult
+    ? [
+        {
+          title: "Caches are isolated from personal data",
+          body: `${formatBytes(safeItems.reduce((sum, item) => sum + (item.sizeBytes || 0), 0))} sits in known rebuildable cache paths.`,
+          evidence: `${safeItems.reduce((sum, item) => sum + (item.evidenceCount || 0), 0)} sources`,
+        },
+        {
+          title: "Older files have low recent activity",
+          body: `${formatBytes(scanResult.ageBuckets.inactive90To180Bytes + scanResult.ageBuckets.inactive180PlusBytes)} has no activity signal in 90+ days.`,
+          evidence: "scan metadata",
+        },
+        {
+          title: "Exact copies are ready for review",
+          body: `${scanResult.duplicateGroups.length} content-hash groups can be inspected without assuming which copy should be kept.`,
+          evidence: "BLAKE3 hashes",
+        },
+      ]
+    : findings;
+  const ageChartEntries = scanResult
+    ? [
+        [formatBytes(scanResult.ageBuckets.recentBytes), "0–30", "days", scanResult.ageBuckets.recentBytes, "mint"],
+        [formatBytes(scanResult.ageBuckets.inactive30To90Bytes), "31–90", "days", scanResult.ageBuckets.inactive30To90Bytes, "green"],
+        [formatBytes(scanResult.ageBuckets.inactive90To180Bytes), "91–180", "days", scanResult.ageBuckets.inactive90To180Bytes, "amber"],
+        [formatBytes(scanResult.ageBuckets.inactive180PlusBytes), "180+", "days", scanResult.ageBuckets.inactive180PlusBytes, "orange"],
+      ]
+    : [
+        ["0.6 GB", "0–30", "days", 14, "mint"],
+        ["2.1 GB", "31–90", "days", 28, "green"],
+        ["3.4 GB", "91–180", "days", 42, "amber"],
+        ["10.3 GB", "180+", "days", 82, "orange"],
+      ];
+  const ageMaximum = scanResult ? Math.max(...ageChartEntries.map((entry) => entry[3]), 1) : 100;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${activeNav !== "cleanup" ? "without-findings" : ""}`}>
       <aside className="sidebar">
         <div className="brand-lockup">
           <img src={lunaMark} alt="" />
@@ -344,10 +526,7 @@ export function App() {
               key={item.id}
               item={item}
               active={activeNav === item.id}
-              onClick={() => {
-                if (item.id === "cleanup") setActiveNav(item.id);
-                else setToast(`${item.label} is being connected to the scan engine in the next checkpoint.`);
-              }}
+              onClick={() => setActiveNav(item.id)}
             />
           ))}
         </nav>
@@ -355,28 +534,32 @@ export function App() {
         <div className="drive-summary">
           <div>
             <HardDrive24Regular />
-            <span>Local Disk (C:)</span>
+            <span>{currentRoot?.name || "Local Disk (C:)"}</span>
           </div>
-          <small>182 GB free of 476 GB</small>
-          <progress value="62" max="100">62%</progress>
+          <small>{currentRoot?.totalBytes ? `${formatBytes(currentRoot.availableBytes)} free of ${formatBytes(currentRoot.totalBytes)}` : "Choose a drive to measure capacity"}</small>
+          <progress value={usedPercent} max="100">{Math.round(usedPercent)}%</progress>
         </div>
-        <button className="rescan-button" type="button" onClick={() => setToast("A fresh scan will start when the Rust engine is connected.")}>
+        <button className="rescan-button" type="button" disabled={scanning} onClick={() => runScan()}>
           <ArrowSync24Regular />
-          Rescan
+          {scanning ? "Scanning" : "Rescan"}
         </button>
-        <span className="scan-stamp">Scanned on Jul 14, 2026<br />09:18 AM · v{appVersion}</span>
+        <span className="scan-stamp">{scanResult ? `Scanned ${formatDateTime(scanResult.scannedAt)}` : "Ready for a local scan"}<br />v{appVersion}</span>
       </aside>
 
+      {activeNav !== "cleanup" ? (
+        <main className="feature-workspace">{featureViews[activeNav]}</main>
+      ) : (
+      <>
       <main className="review-workspace">
         <header className="review-header">
           <div>
-            <h1>A careful plan to reclaim 18.6 GB</h1>
+            <h1>A careful plan to review {formatSize(cleanupTotal)}</h1>
             <p>We’ve analyzed what you don’t need. Review with confidence—nothing is deleted without confirmation.</p>
             <div className="scan-trust">
               <ShieldCheckmark24Regular />
               <span>Based on scan results only</span>
               <i />
-              <time dateTime="2026-07-14T09:18:00">Jul 14, 2026&nbsp;&nbsp; 09:18 AM</time>
+              <time dateTime={scanResult?.scannedAt || "2026-07-14T09:18:00"}>{scanResult ? formatDateTime(scanResult.scannedAt) : "Jul 14, 2026  09:18 AM"}</time>
             </div>
           </div>
           <div className="header-action">
@@ -428,7 +611,7 @@ export function App() {
         </div>
         <p className="findings-intro">I analyzed your scan results and here’s what stands out.</p>
         <ol className="findings-list">
-          {findings.map((finding, index) => (
+          {liveFindings.map((finding, index) => (
             <li key={finding.title}>
               <span className="finding-number">{index + 1}</span>
               <div>
@@ -444,15 +627,10 @@ export function App() {
         <div className="age-chart">
           <h3>Age distribution <span>(all reviewed items)</span></h3>
           <div className="chart-body" aria-label="Age distribution: 0.6 GB zero to thirty days, 2.1 GB thirty-one to ninety days, 3.4 GB ninety-one to one-hundred-eighty days, 10.3 GB over one-hundred-eighty days">
-            {[
-              ["0.6 GB", "0–30", "days", 14, "mint"],
-              ["2.1 GB", "31–90", "days", 28, "green"],
-              ["3.4 GB", "91–180", "days", 42, "amber"],
-              ["10.3 GB", "180+", "days", 82, "orange"],
-            ].map(([value, label, unit, height, color]) => (
+            {ageChartEntries.map(([value, label, unit, rawHeight, color]) => (
               <div className="chart-column" key={label}>
                 <span>{value}</span>
-                <i className={`bar bar-${color}`} style={{ height: `${height}%` }} />
+                <i className={`bar bar-${color}`} style={{ height: `${Math.max((rawHeight / ageMaximum) * 82, rawHeight ? 5 : 0)}%` }} />
                 <strong>{label}</strong>
                 <small>{unit}</small>
               </div>
@@ -483,17 +661,19 @@ export function App() {
           <span>I can explain anything in this plan.</span>
         </div>
       </aside>
+      </>
+      )}
 
       {confirming && (
         <ConfirmDialog
           count={selectedItems.length}
           size={selectedSize}
+          busy={cleaning}
           onCancel={() => setConfirming(false)}
-          onConfirm={completePreviewCleanup}
+          onConfirm={completeCleanup}
         />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
 }
-

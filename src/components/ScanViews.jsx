@@ -1,0 +1,250 @@
+import { useMemo, useState } from "react";
+import {
+  ArrowRight24Regular,
+  ArrowSync24Regular,
+  CalendarClock24Regular,
+  CheckmarkCircle24Regular,
+  DocumentCopy24Regular,
+  Folder24Regular,
+  HardDrive24Regular,
+  Info24Regular,
+  LockClosed24Regular,
+  Search24Regular,
+  Settings24Regular,
+  ShieldCheckmark24Regular,
+  Sparkle24Regular,
+  Warning24Regular,
+} from "@fluentui/react-icons";
+import { formatBytes, formatCount, formatDateTime, formatDuration } from "../lib/format.js";
+
+function EmptyScan({ onScan, onChooseFolder }) {
+  return (
+    <section className="empty-scan">
+      <span><Search24Regular /></span>
+      <h2>See where your space went</h2>
+      <p>Choose a folder or drive. Luna scans file metadata locally and keeps file contents on this PC.</p>
+      <div>
+        <button className="primary-button" type="button" onClick={onScan}>Scan default folder</button>
+        <button className="secondary-button" type="button" onClick={onChooseFolder}>Choose a folder</button>
+      </div>
+    </section>
+  );
+}
+
+function FeatureHeader({ eyebrow, title, description, action }) {
+  return (
+    <header className="feature-header">
+      <div>
+        <span>{eyebrow}</span>
+        <h1>{title}</h1>
+        <p>{description}</p>
+      </div>
+      {action}
+    </header>
+  );
+}
+
+function ScanProgress({ progress }) {
+  return (
+    <section className="scan-progress-panel" aria-live="polite">
+      <span className="scan-spinner"><ArrowSync24Regular /></span>
+      <div>
+        <h2>Reading storage metadata…</h2>
+        <p>{progress?.currentPath || "Preparing the scan"}</p>
+        <span>{formatCount(progress?.scannedFiles || 0)} files · {formatBytes(progress?.scannedBytes || 0)}</span>
+      </div>
+      <div className="indeterminate-track"><i /></div>
+    </section>
+  );
+}
+
+function AgeDistribution({ result }) {
+  const entries = [
+    ["0–30 days", result.ageBuckets.recentBytes, "fresh"],
+    ["31–90 days", result.ageBuckets.inactive30To90Bytes, "warm"],
+    ["91–180 days", result.ageBuckets.inactive90To180Bytes, "stale"],
+    ["180+ days", result.ageBuckets.inactive180PlusBytes, "old"],
+  ];
+  const maximum = Math.max(...entries.map((entry) => entry[1]), 1);
+  return (
+    <section className="feature-surface age-distribution">
+      <div className="surface-heading">
+        <div><h2>Activity age</h2><p>Last-access or modification signal for scanned files.</p></div>
+      </div>
+      <div className="age-rows">
+        {entries.map(([label, bytes, tone]) => (
+          <div className="age-row" key={label}>
+            <span>{label}</span>
+            <div><i className={`tone-${tone}`} style={{ width: `${Math.max((bytes / maximum) * 100, bytes ? 2 : 0)}%` }} /></div>
+            <strong>{formatBytes(bytes)}</strong>
+          </div>
+        ))}
+      </div>
+      <p className="timestamp-caveat"><Info24Regular /> Windows may disable or defer last-access updates. Luna uses modification time as a fallback and treats age as review evidence, not a deletion rule.</p>
+    </section>
+  );
+}
+
+function CategoryTable({ result, limit }) {
+  const maximum = Math.max(...result.categories.map((category) => category.sizeBytes), 1);
+  return (
+    <section className="feature-surface category-table">
+      <div className="surface-heading">
+        <div><h2>Largest areas</h2><p>Grouped by the first folder beneath the selected root.</p></div>
+        <span>{result.categories.length} areas</span>
+      </div>
+      <div className="data-table category-data-table">
+        <div className="data-header"><span>Name</span><span>Space</span><span>Files</span><span>Last activity</span></div>
+        {result.categories.slice(0, limit).map((category) => (
+          <div className="data-row" key={category.path}>
+            <div className="path-cell"><Folder24Regular /><span><strong>{category.name}</strong><small>{category.path}</small></span></div>
+            <div className="size-with-bar"><strong>{formatBytes(category.sizeBytes)}</strong><i><b style={{ width: `${Math.max((category.sizeBytes / maximum) * 100, 2)}%` }} /></i></div>
+            <span>{formatCount(category.fileCount)}</span>
+            <span>{category.lastUsedDays == null ? "Unknown" : `${category.lastUsedDays} days ago`}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function OverviewView({ result, scanning, progress, onScan, onChooseFolder }) {
+  if (scanning) return <ScanProgress progress={progress} />;
+  if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
+  const reclaimable = result.cleanupItems.reduce((sum, item) => sum + item.sizeBytes, 0);
+  return (
+    <div className="feature-view">
+      <FeatureHeader
+        eyebrow="Overview"
+        title={`A clear view of ${result.rootName}`}
+        description={`Scanned ${formatCount(result.fileCount)} files without uploading file contents.`}
+        action={<button className="primary-button" type="button" onClick={onScan}><ArrowSync24Regular /> Scan again</button>}
+      />
+      <section className="summary-strip">
+        <div><span>Scanned data</span><strong>{formatBytes(result.totalBytes)}</strong><small>{formatCount(result.folderCount)} folders</small></div>
+        <div><span>Potential review</span><strong>{formatBytes(reclaimable)}</strong><small>{result.cleanupItems.length} cleanup signals</small></div>
+        <div><span>Exact duplicates</span><strong>{result.duplicateGroups.length}</strong><small>Content-hash groups</small></div>
+        <div><span>Scan time</span><strong>{formatDuration(result.durationMs)}</strong><small>{formatDateTime(result.scannedAt)}</small></div>
+      </section>
+      <CategoryTable result={result} limit={8} />
+      <AgeDistribution result={result} />
+    </div>
+  );
+}
+
+export function ScanResultsView({ result, scanning, progress, error, onScan, onChooseFolder }) {
+  if (scanning) return <ScanProgress progress={progress} />;
+  return (
+    <div className="feature-view">
+      <FeatureHeader
+        eyebrow="Scan results"
+        title={result ? "The scan is ready to review" : "Start a local storage scan"}
+        description={result ? result.root : "Luna reads names, sizes, and timestamps locally. It does not open file contents during a storage scan."}
+        action={<div className="feature-actions"><button className="secondary-button" type="button" onClick={onChooseFolder}>Choose folder</button><button className="primary-button" type="button" onClick={onScan}>Scan now</button></div>}
+      />
+      {error && <div className="inline-error"><Warning24Regular />{error}</div>}
+      {!result ? <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} /> : (
+        <>
+          <section className="scan-summary-line"><CheckmarkCircle24Regular /><div><strong>Completed in {formatDuration(result.durationMs)}</strong><span>{formatCount(result.fileCount)} files · {formatBytes(result.totalBytes)} · {result.warnings.length} warnings</span></div><time>{formatDateTime(result.scannedAt)}</time></section>
+          <CategoryTable result={result} limit={24} />
+          {result.warnings.length > 0 && <section className="feature-surface warning-list"><h2>Skipped safely</h2>{result.warnings.map((warning) => <p key={warning}><Warning24Regular />{warning}</p>)}</section>}
+        </>
+      )}
+    </div>
+  );
+}
+
+export function StorageView({ result, scanning, progress, onScan, onChooseFolder }) {
+  if (scanning) return <ScanProgress progress={progress} />;
+  if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
+  const displayed = result.categories.slice(0, 12);
+  const total = Math.max(displayed.reduce((sum, item) => sum + item.sizeBytes, 0), 1);
+  return (
+    <div className="feature-view">
+      <FeatureHeader
+        eyebrow="Storage explorer"
+        title="What is taking the space"
+        description={result.root}
+        action={<button className="secondary-button" type="button" onClick={onChooseFolder}><Folder24Regular /> Choose another folder</button>}
+      />
+      <section className="feature-surface storage-map">
+        <div className="surface-heading"><div><h2>Storage map</h2><p>Area is proportional to the folder’s scanned size.</p></div><strong>{formatBytes(result.totalBytes)}</strong></div>
+        <div className="treemap" role="img" aria-label="Proportional storage map">
+          {displayed.map((category, index) => (
+            <div className={`treemap-node treemap-tone-${index % 5}`} key={category.path} style={{ flexGrow: Math.max(category.sizeBytes / total, 0.025), flexBasis: `${Math.max((category.sizeBytes / total) * 100, 8)}%` }}>
+              <strong>{category.name}</strong><span>{formatBytes(category.sizeBytes)}</span><small>{category.lastUsedDays == null ? "Activity unknown" : `Last activity ${category.lastUsedDays} days ago`}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+      <CategoryTable result={result} limit={24} />
+    </div>
+  );
+}
+
+export function DuplicatesView({ result, scanning, progress, onScan, onChooseFolder }) {
+  if (scanning) return <ScanProgress progress={progress} />;
+  if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
+  const reclaimable = result.duplicateGroups.reduce((sum, group) => sum + group.reclaimableBytes, 0);
+  return (
+    <div className="feature-view">
+      <FeatureHeader eyebrow="Duplicates" title={`${formatBytes(reclaimable)} in exact copies`} description="Luna compares size first, then BLAKE3 content hashes. No duplicate is selected for deletion automatically." action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Scan another folder</button>} />
+      {result.duplicateGroups.length === 0 ? <section className="empty-state-surface"><DocumentCopy24Regular /><h2>No exact duplicates in this scan</h2><p>Try a broader folder or drive if you want to search elsewhere.</p></section> : (
+        <section className="feature-surface duplicate-list">
+          {result.duplicateGroups.map((group, index) => (
+            <details key={group.contentHash} open={index === 0}>
+              <summary><span><DocumentCopy24Regular /></span><div><strong>{group.files[0]?.name || "Duplicate group"}</strong><small>{group.files.length} identical files · hash {group.contentHash.slice(0, 12)}…</small></div><b>{formatBytes(group.reclaimableBytes)} reclaimable</b></summary>
+              <div>{group.files.map((file) => <div className="duplicate-file" key={file.path}><span>{file.path}</span><small>{file.lastUsedDays == null ? "Activity unknown" : `${file.lastUsedDays} days ago`}</small></div>)}</div>
+            </details>
+          ))}
+        </section>
+      )}
+    </div>
+  );
+}
+
+export function LargeFilesView({ result, scanning, progress, onScan, onChooseFolder }) {
+  if (scanning) return <ScanProgress progress={progress} />;
+  if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
+  return (
+    <div className="feature-view">
+      <FeatureHeader eyebrow="Large files" title="The files with the biggest footprint" description="Sorted by size. Luna shows these for investigation only and never preselects them for cleanup." action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Choose another folder</button>} />
+      <section className="feature-surface large-file-table">
+        <div className="data-table"><div className="data-header"><span>File</span><span>Size</span><span>Activity</span></div>{result.largeFiles.map((file) => <div className="data-row" key={file.path}><div className="path-cell"><Folder24Regular /><span><strong>{file.name}</strong><small>{file.path}</small></span></div><strong>{formatBytes(file.sizeBytes)}</strong><span>{file.lastUsedDays == null ? "Unknown" : `${file.lastUsedDays} days ago`}</span></div>)}</div>
+      </section>
+    </div>
+  );
+}
+
+export function ScheduleView() {
+  const [enabled, setEnabled] = useState(false);
+  const [frequency, setFrequency] = useState("Weekly");
+  return (
+    <div className="feature-view narrow-feature">
+      <FeatureHeader eyebrow="Schedule" title="A quiet storage check-in" description="Configure the experience now. Native Windows scheduling is planned for a later release and will require an explicit permission step." />
+      <section className="feature-surface settings-list">
+        <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Scheduled scan</strong><small>Prepare a local scan on your preferred cadence.</small></div><button className={`switch ${enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={enabled} onClick={() => setEnabled(!enabled)}><i /></button></div>
+        <div className="setting-row"><span className="setting-icon"><ArrowSync24Regular /></span><div><strong>Frequency</strong><small>No automatic cleanup—reports only.</small></div><select value={frequency} onChange={(event) => setFrequency(event.target.value)} disabled={!enabled}><option>Daily</option><option>Weekly</option><option>Monthly</option></select></div>
+      </section>
+      <div className="privacy-callout"><ShieldCheckmark24Regular /><div><strong>Scheduled cleanup stays off</strong><p>Luna will never remove files in the background. Cleanup always comes back to the review screen for confirmation.</p></div></div>
+    </div>
+  );
+}
+
+export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChooseFolder }) {
+  const [diagnostics, setDiagnostics] = useState(false);
+  const root = useMemo(() => roots.find((entry) => entry.path === selectedRoot), [roots, selectedRoot]);
+  return (
+    <div className="feature-view narrow-feature">
+      <FeatureHeader eyebrow="Settings" title="Private by default" description="Control where Luna scans and what metadata leaves your PC." />
+      <section className="feature-surface settings-list">
+        <div className="setting-row"><span className="setting-icon"><HardDrive24Regular /></span><div><strong>Default scan location</strong><small>{root?.path || selectedRoot || "Home folder"}</small></div><select value={selectedRoot} onChange={(event) => onRootChange(event.target.value)}>{roots.map((entry) => <option key={entry.id} value={entry.path}>{entry.name}</option>)}</select></div>
+        <div className="setting-row"><span className="setting-icon"><Folder24Regular /></span><div><strong>Custom folder</strong><small>Choose any accessible folder for a one-time scan.</small></div><button className="secondary-button" type="button" onClick={onChooseFolder}>Choose</button></div>
+        <div className="setting-row"><span className="setting-icon"><Settings24Regular /></span><div><strong>Share anonymous diagnostics</strong><small>Off by default. No file names or paths.</small></div><button className={`switch ${diagnostics ? "is-on" : ""}`} type="button" role="switch" aria-checked={diagnostics} onClick={() => setDiagnostics(!diagnostics)}><i /></button></div>
+      </section>
+      <section className="feature-surface privacy-details"><div><LockClosed24Regular /><h2>Scan metadata stays local</h2></div><p>Names, paths, sizes, timestamps, and duplicate hashes are processed by the Rust backend. AI reporting is a separate, explicit action and receives a minimized summary rather than file contents.</p><button className="primary-button" type="button" onClick={onScan}>Scan selected location <ArrowRight24Regular /></button></section>
+      <div className="model-note"><Sparkle24Regular /><span><strong>AI model</strong> GPT-5.6-Luna integration arrives in the next checkpoint.</span></div>
+    </div>
+  );
+}
+

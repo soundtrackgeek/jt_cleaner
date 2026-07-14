@@ -3,4 +3,3 @@
 fn main() {
     luna_clean_lib::run();
 }
-

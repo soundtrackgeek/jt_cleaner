@@ -396,7 +396,7 @@ fn start_schedule_monitor(app: AppHandle, flag: Arc<AtomicBool>) {
     tauri::async_runtime::spawn(async move {
         loop {
             background_scan(app.clone(), flag.clone(), false).await;
-            tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
     });
 }

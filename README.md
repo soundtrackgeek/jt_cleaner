@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.9.0` adds a snapshot-history inspector to Trends. Each compact capture can be reviewed in detail and deleted individually without affecting scanned files or the rest of the history.
+Version `0.10.0` adds a local capture-time picker to scheduled snapshots. Daily, weekly, and monthly schedules can now run at a chosen time such as `08:30` or `09:00`.
 
 ### Included
 
@@ -26,7 +26,7 @@ Version `0.9.0` adds a snapshot-history inspector to Trends. Each compact captur
 - Confirmed deletion of an individual snapshot without deleting scanned files or clearing other captures.
 - Native system tray with **Open Luna Clean**, **Capture storage snapshot**, and **Quit Luna Clean** actions.
 - Optional startup with Windows using a hidden `--hidden` launch path.
-- Daily, weekly, or monthly background snapshot scheduling with weekly as the default.
+- Daily, weekly, or monthly background snapshot scheduling with a configurable local capture time; weekly at `09:00` is the default.
 - A single-scan guard shared by foreground and scheduled scans.
 - Close-to-tray behavior that destroys the WebView instead of keeping the full interface hidden in memory.
 - Persistent main-window position, size, and maximized state across tray reopen, app restart, and update relaunch.
@@ -71,7 +71,7 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 
 ## Tray and scheduled snapshots
 
-Open **Schedule** to enable a daily, weekly, or monthly aggregate snapshot and choose its scan location. Scheduled scans never clean files. If a scan fails, Luna records the error and waits six hours before retrying rather than looping aggressively.
+Open **Schedule** to enable a daily, weekly, or monthly aggregate snapshot, choose its local capture time, and select its scan location. The time picker accepts times such as `08:30` and `09:00`; Luna checks for due work every minute while its tray process is running. Existing schedules created before version `0.10.0` use `09:00`. Scheduled scans never clean files. If a scan fails, Luna records the error and waits six hours before retrying rather than looping aggressively.
 
 Open **Settings** to enable **Start with Windows**. Luna then starts hidden in the tray, checks whether a snapshot is due, and keeps the full WebView unloaded until you open the app. Closing the main window returns to that lightweight tray-only state; use **Quit Luna Clean** from the tray to exit completely.
 

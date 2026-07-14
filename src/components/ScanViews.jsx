@@ -5,6 +5,7 @@ import {
   ArrowSync24Regular,
   CalendarClock24Regular,
   CheckmarkCircle24Regular,
+  Clock24Regular,
   DocumentCopy24Regular,
   Folder24Regular,
   HardDrive24Regular,
@@ -221,15 +222,17 @@ export function LargeFilesView({ result, scanning, progress, onScan, onChooseFol
 export function ScheduleView({ schedule, roots, selectedRoot, onScheduleChange, onCapture }) {
   const enabled = schedule?.enabled || false;
   const frequency = schedule?.frequency || "Weekly";
+  const runTime = schedule?.runTime || "09:00";
   const scheduleRoot = schedule?.scanRoot || selectedRoot || roots[0]?.path || "";
   const busy = schedule?.isScanning || false;
   return (
     <div className="feature-view narrow-feature">
       <FeatureHeader eyebrow="Schedule" title="A quiet storage check-in" description="Capture a compact snapshot on your preferred cadence. Luna can scan from the tray without keeping the full interface in memory." action={<button className="secondary-button" type="button" disabled={busy} onClick={onCapture}><ArrowSync24Regular /> {busy ? "Capturing…" : "Capture now"}</button>} />
       <section className="feature-surface settings-list">
-        <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Scheduled snapshots</strong><small>{enabled ? (schedule?.nextRunAt ? `Next capture ${formatDateTime(schedule.nextRunAt)}` : `${frequency} snapshots enabled.`) : "Off until you choose to enable it."}</small></div><button className={`switch ${enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={enabled} onClick={() => onScheduleChange({ enabled: !enabled, frequency, scanRoot: scheduleRoot })}><i /></button></div>
-        <div className="setting-row"><span className="setting-icon"><ArrowSync24Regular /></span><div><strong>Frequency</strong><small>No automatic cleanup—snapshots and reports only.</small></div><select value={frequency} onChange={(event) => onScheduleChange({ enabled, frequency: event.target.value, scanRoot: scheduleRoot })} disabled={!enabled}><option>Daily</option><option>Weekly</option><option>Monthly</option></select></div>
-        <div className="setting-row"><span className="setting-icon"><HardDrive24Regular /></span><div><strong>Scan location</strong><small>{scheduleRoot || "Choose a location in Settings"}</small></div><select value={scheduleRoot} onChange={(event) => onScheduleChange({ enabled, frequency, scanRoot: event.target.value })} disabled={!enabled}>{roots.map((entry) => <option key={entry.id} value={entry.path}>{entry.name}</option>)}</select></div>
+        <div className="setting-row"><span className="setting-icon"><CalendarClock24Regular /></span><div><strong>Scheduled snapshots</strong><small>{enabled ? (schedule?.nextRunAt ? `Next capture ${formatDateTime(schedule.nextRunAt)}` : `${frequency} snapshots enabled at ${runTime}.`) : "Off until you choose to enable it."}</small></div><button className={`switch ${enabled ? "is-on" : ""}`} type="button" role="switch" aria-checked={enabled} onClick={() => onScheduleChange({ enabled: !enabled, frequency, runTime, scanRoot: scheduleRoot })}><i /></button></div>
+        <div className="setting-row"><span className="setting-icon"><ArrowSync24Regular /></span><div><strong>Frequency</strong><small>No automatic cleanup—snapshots and reports only.</small></div><select value={frequency} onChange={(event) => onScheduleChange({ enabled, frequency: event.target.value, runTime, scanRoot: scheduleRoot })} disabled={!enabled}><option>Daily</option><option>Weekly</option><option>Monthly</option></select></div>
+        <div className="setting-row"><span className="setting-icon"><Clock24Regular /></span><div><strong>Capture time</strong><small>Uses your local Windows time.</small></div><input type="time" value={runTime} step="900" aria-label="Capture time" onChange={(event) => onScheduleChange({ enabled, frequency, runTime: event.target.value, scanRoot: scheduleRoot })} disabled={!enabled} /></div>
+        <div className="setting-row"><span className="setting-icon"><HardDrive24Regular /></span><div><strong>Scan location</strong><small>{scheduleRoot || "Choose a location in Settings"}</small></div><select value={scheduleRoot} onChange={(event) => onScheduleChange({ enabled, frequency, runTime, scanRoot: event.target.value })} disabled={!enabled}>{roots.map((entry) => <option key={entry.id} value={entry.path}>{entry.name}</option>)}</select></div>
       </section>
       <div className="privacy-callout"><ShieldCheckmark24Regular /><div><strong>Scheduled cleanup stays off</strong><p>Luna never removes files in the background. Closing the window releases its WebView; the small Rust tray process stays available for your next due snapshot.</p></div></div>
       {schedule?.lastError && <div className="scan-error"><Warning24Regular /><span>{schedule.lastError}</span></div>}

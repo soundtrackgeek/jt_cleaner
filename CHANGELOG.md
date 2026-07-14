@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0] - 2026-07-14
+
+### Added
+
+- Choose a local capture time for daily, weekly, or monthly scheduled snapshots.
+
+### Changed
+
+- Check for due scheduled snapshots every minute so captures begin close to their selected time.
+- Existing schedules without a saved capture time now default to `09:00`.
+
 ## [0.9.0] - 2026-07-14
 
 ### Added

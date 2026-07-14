@@ -381,7 +381,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.9.0");
+  const [appVersion, setAppVersion] = useState("0.10.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -389,14 +389,14 @@ export function App() {
   const [scanError, setScanError] = useState("");
   const [scanning, setScanning] = useState(false);
   const [trendHistory, setTrendHistory] = useState(null);
-  const [scheduleStatus, setScheduleStatus] = useState({ enabled: false, frequency: "Weekly", scanRoot: "", isScanning: false });
+  const [scheduleStatus, setScheduleStatus] = useState({ enabled: false, frequency: "Weekly", runTime: "09:00", scanRoot: "", isScanning: false });
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [startupBusy, setStartupBusy] = useState(false);
   const [aiStatus, setAiStatus] = useState({ configured: false, model: "gpt-5.6-luna", source: "none" });
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.9.0", availableVersion: "", progress: 0, message: "" });
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.10.0", availableVersion: "", progress: 0, message: "" });
   const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
   const updateCheckInFlightRef = useRef(false);
@@ -602,7 +602,7 @@ export function App() {
     try {
       const updated = await invoke("update_schedule", { request: next });
       setScheduleStatus(updated);
-      setToast(updated.enabled ? `${updated.frequency} snapshots are scheduled.` : "Scheduled snapshots are off.");
+      setToast(updated.enabled ? `${updated.frequency} snapshots are scheduled for ${updated.runTime}.` : "Scheduled snapshots are off.");
     } catch (error) {
       setToast(`Schedule unchanged: ${String(error)}`);
     }

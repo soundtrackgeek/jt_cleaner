@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.14.2` restores the newest available snapshot even when an update or still-running older tray process did not create the detailed latest-scan cache. Aggregate snapshots reopen with their saved totals and a clear prompt to rescan for file-level details.
+Version `0.14.3` keeps whole-drive scans metadata-only inside OneDrive. Online-only placeholders remain visible but count as 0 local bytes, locally available files count only while they occupy disk, and Luna never opens, hashes, downloads, pins, dehydrates, or cleans OneDrive files.
 
 ### Included
 
@@ -14,6 +14,7 @@ Version `0.14.2` restores the newest available snapshot even when an update or s
 - Automatic restoration of the newest locally saved scan after the window or app restarts, preferring the detailed cache and falling back to aggregate trend history when needed.
 - A dated snapshot warning and **Run a new scan** action on restored Scan results, Storage explorer, Duplicates, and Large files views.
 - Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
+- OneDrive-safe whole-drive inventory using file names, sizes, and Files On-Demand attributes only; online-only placeholders count as 0 local bytes while always-kept and temporarily cached files are reported separately.
 - Top-level storage aggregation, selectable large-file ranking, and activity-age buckets.
 - Instant Storage explorer drill-down from map tiles and folder rows, including empty folders, direct files, breadcrumbs, and back navigation without a second disk scan.
 - Windows-reported used space and total capacity for whole-drive scan summaries and trend snapshots.
@@ -69,6 +70,7 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 2. Open **Scan results**, **Storage explorer**, **Duplicates**, or **Large files**.
 3. Choose the default home folder or a detected drive in **Settings**; Luna remembers that default across restarts. Use **Choose folder** for a one-time custom location.
 4. Start the scan and keep the app open while Luna reports progress.
+   A whole-drive scan may enumerate OneDrive paths so Storage explorer can represent all of `C:\`, but Luna never opens their contents or changes Files On-Demand state. Online-only placeholders contribute 0 local bytes; always-kept and temporarily cached files contribute their current local size.
 5. After reopening Luna, those four scan views show the latest saved scan with its date and time. An older aggregate-only snapshot restores Scan Results, top-level Storage explorer totals, and duplicate opportunity; use **Run a new scan** to rebuild drill-down and file-level Duplicates or Large Files lists.
 6. In **Storage explorer**, select a folder in either the map or Largest areas list to see the folders and direct files immediately inside it. Use **Back** or an earlier breadcrumb to move up again.
 7. Review findings in **Cleanup review**. Expand an item, then select its source count to inspect the scanned locations, measured size, and file count. Safe caches are selected only when data exists; duplicate files, large files, and old Downloads are never selected automatically.
@@ -91,7 +93,7 @@ Every push to `master` runs `.github/workflows/release.yml`. The workflow checks
 
 The updater private key and its password are stored as `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` GitHub Actions secrets and are never committed. The development machine's backup is outside the repository at `%USERPROFILE%\.tauri\luna-clean.key` with its separate password file; keep a secure offline backup of both because future builds must use the same key to update existing installations.
 
-Large drive scans may encounter protected Windows folders. Luna skips unreadable entries, reports bounded warnings, does not follow symbolic links, and excludes common high-churn developer folders such as `.git` and `node_modules`. Duplicate analysis is capped at 20,000 files of at least 1 MB so large scans remain bounded; storage totals are not capped.
+Large drive scans may encounter protected Windows folders. Luna skips unreadable entries, reports bounded warnings, does not follow symbolic links, and excludes common high-churn developer folders such as `.git` and `node_modules`. OneDrive files are inventory-only: Luna reads directory metadata to report locally occupied space, excludes every OneDrive path from duplicate hashing, and refuses file actions against OneDrive results. Duplicate analysis is capped at 20,000 non-cloud files of at least 1 MB so large scans remain bounded; storage totals are not capped.
 
 ## Commands
 
@@ -106,7 +108,7 @@ npm run tauri build  # Build the Windows NSIS installer
 
 ## Safety direction
 
-Luna Clean distinguishes rebuildable caches from personal data, defaults review-sensitive files to unselected, and requires confirmation before removal. Category cleanup accepts only known IDs and revalidates cache roots. File-level commands accept only entries from the latest scan, reject symbolic links and changed files, keep one verified copy per duplicate group, and never accept an arbitrary unscanned frontend path. Trend history stays in Luna's local application-data directory as compact JSON aggregates. Separately, Luna keeps one detailed latest-scan cache locally so the scan views can survive a restart; every successful foreground or scheduled scan replaces it. Aggregate AI reports receive capped totals and signals; explicit file reviews receive only the selected file's minimized metadata, with user prefixes redacted or paths made relative to the scan root. File contents are never sent, and OpenAI response storage is disabled for these requests.
+Luna Clean distinguishes rebuildable caches from personal data, defaults review-sensitive files to unselected, and requires confirmation before removal. Category cleanup accepts only known IDs and revalidates cache roots. File-level commands accept only entries from the latest scan, reject symbolic links and changed files, keep one verified copy per duplicate group, never accept an arbitrary unscanned frontend path, and refuse OneDrive paths. Whole-drive scans use OneDrive metadata only and never request file contents or modify Files On-Demand state. Trend history stays in Luna's local application-data directory as compact JSON aggregates. Separately, Luna keeps one detailed latest-scan cache locally so the scan views can survive a restart; every successful foreground or scheduled scan replaces it. Aggregate AI reports receive capped totals and signals; explicit file reviews receive only the selected file's minimized metadata, with user prefixes redacted or paths made relative to the scan root. File contents are never sent, and OpenAI response storage is disabled for these requests.
 
 ## Planned next stages
 

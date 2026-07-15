@@ -1,7 +1,10 @@
-use crate::models::{
-    AgeBuckets, CleanupEvidenceSource, CleanupItem, CleanupResult, DeletedLargeFile, DuplicateFile,
-    DuplicateGroup, LargeFile, LargeFileDeleteResult, ScanProgress, ScanResult, ScanRootInfo,
-    StorageCategory,
+use crate::{
+    cloud_files::{self, CloudFilePolicy},
+    models::{
+        AgeBuckets, CleanupEvidenceSource, CleanupItem, CleanupResult, DeletedLargeFile,
+        DuplicateFile, DuplicateGroup, LargeFile, LargeFileDeleteResult, ScanProgress, ScanResult,
+        ScanRootInfo, StorageCategory,
+    },
 };
 use blake3::Hasher;
 use chrono::{DateTime, Local, SecondsFormat};
@@ -29,6 +32,27 @@ const MIN_DUPLICATE_SIZE: u64 = 1_048_576;
 struct CandidateFile {
     path: PathBuf,
     activity: Option<SystemTime>,
+}
+
+#[derive(Debug, Default)]
+struct OneDriveScanStats {
+    files: u64,
+    online_only_files: u64,
+    always_kept_files: u64,
+    cached_files: u64,
+}
+
+impl OneDriveScanStats {
+    fn observe(&mut self, metadata: &fs::Metadata) {
+        self.files = self.files.saturating_add(1);
+        if cloud_files::is_online_only(metadata) {
+            self.online_only_files = self.online_only_files.saturating_add(1);
+        } else if cloud_files::is_always_kept(metadata) {
+            self.always_kept_files = self.always_kept_files.saturating_add(1);
+        } else {
+            self.cached_files = self.cached_files.saturating_add(1);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -249,7 +273,21 @@ impl LargeFileIndex {
     }
 
     fn validate_record(&self, record: &LargeFile) -> Result<PathBuf, String> {
+        self.validate_record_with_policy(record, &CloudFilePolicy::from_environment())
+    }
+
+    fn validate_record_with_policy(
+        &self,
+        record: &LargeFile,
+        cloud_policy: &CloudFilePolicy,
+    ) -> Result<PathBuf, String> {
         let path = Path::new(&record.path);
+        if cloud_policy.is_one_drive_path(path) {
+            return Err(
+                "Luna leaves OneDrive files untouched. Manage this file through OneDrive or File Explorer."
+                    .to_string(),
+            );
+        }
         let metadata = fs::symlink_metadata(path).map_err(|_| {
             "It is no longer available. Run the scan again to refresh the list.".to_string()
         })?;
@@ -414,7 +452,22 @@ fn scan_progress(
     }
 }
 
-pub fn scan_path<F>(requested_path: &str, mut on_progress: F) -> Result<ScanOutput, String>
+pub fn scan_path<F>(requested_path: &str, on_progress: F) -> Result<ScanOutput, String>
+where
+    F: FnMut(ScanProgress),
+{
+    scan_path_with_policy(
+        requested_path,
+        CloudFilePolicy::from_environment(),
+        on_progress,
+    )
+}
+
+fn scan_path_with_policy<F>(
+    requested_path: &str,
+    cloud_policy: CloudFilePolicy,
+    mut on_progress: F,
+) -> Result<ScanOutput, String>
 where
     F: FnMut(ScanProgress),
 {
@@ -440,6 +493,7 @@ where
     let mut duplicate_candidates: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
     let mut duplicate_candidate_count = 0_usize;
     let mut warnings = Vec::new();
+    let mut one_drive_stats = OneDriveScanStats::default();
 
     let walker = WalkDir::new(&root)
         .follow_links(false)
@@ -483,22 +537,32 @@ where
             }
         };
 
-        let size = metadata.len();
+        let logical_size = metadata.len();
+        let size = cloud_files::local_size_bytes(&metadata);
         let activity = activity_time(&metadata);
         total_bytes = total_bytes.saturating_add(size);
         file_count = file_count.saturating_add(1);
         add_age_bytes(&mut ages, size, activity, now);
         record_storage_file(&root, entry.path(), size, activity, &mut storage_areas);
 
-        let display_path = entry.path().to_string_lossy().to_string();
-        largest.push(Reverse((size, display_path, activity)));
-        if largest.len() > LARGE_FILE_LIMIT {
-            largest.pop();
+        if cloud_policy.is_one_drive_path(entry.path()) {
+            one_drive_stats.observe(&metadata);
         }
 
-        if size >= MIN_DUPLICATE_SIZE && duplicate_candidate_count < DUPLICATE_CANDIDATE_LIMIT {
+        if size > 0 {
+            let display_path = entry.path().to_string_lossy().to_string();
+            largest.push(Reverse((size, display_path, activity)));
+            if largest.len() > LARGE_FILE_LIMIT {
+                largest.pop();
+            }
+        }
+
+        if logical_size >= MIN_DUPLICATE_SIZE
+            && duplicate_candidate_count < DUPLICATE_CANDIDATE_LIMIT
+            && !cloud_policy.blocks_content_access(entry.path(), &metadata)
+        {
             duplicate_candidates
-                .entry(size)
+                .entry(logical_size)
                 .or_default()
                 .push(CandidateFile {
                     path: entry.path().to_path_buf(),
@@ -517,6 +581,19 @@ where
         }
     }
 
+    if one_drive_stats.files > 0 {
+        push_warning(
+            &mut warnings,
+            format!(
+                "Measured {} OneDrive files from metadata only: {} online-only files counted as 0 local bytes, {} always-kept files counted locally, and {} temporarily cached files counted while they occupy disk. Luna did not open, hash, download, or clean them.",
+                one_drive_stats.files,
+                one_drive_stats.online_only_files,
+                one_drive_stats.always_kept_files,
+                one_drive_stats.cached_files,
+            ),
+        );
+    }
+
     if duplicate_candidate_count == DUPLICATE_CANDIDATE_LIMIT {
         push_warning(
             &mut warnings,
@@ -525,7 +602,8 @@ where
         );
     }
 
-    let duplicate_groups = find_duplicate_groups(duplicate_candidates, now, &mut warnings);
+    let duplicate_groups =
+        find_duplicate_groups(duplicate_candidates, now, &cloud_policy, &mut warnings);
     let cleanup_items = build_cleanup_items(&duplicate_groups, now, &mut warnings);
 
     let storage_index = StorageIndex::from_accumulators(&root, storage_areas, now);
@@ -788,6 +866,7 @@ fn add_age_bytes(
 fn find_duplicate_groups(
     candidates: HashMap<u64, Vec<CandidateFile>>,
     now: SystemTime,
+    cloud_policy: &CloudFilePolicy,
     warnings: &mut Vec<String>,
 ) -> Vec<DuplicateGroup> {
     let mut size_groups: Vec<(u64, Vec<CandidateFile>)> = candidates
@@ -805,7 +884,7 @@ fn find_duplicate_groups(
     for (size, files) in size_groups {
         let mut hashes: HashMap<String, Vec<CandidateFile>> = HashMap::new();
         for candidate in files.into_iter().take(DUPLICATE_FILES_PER_GROUP_LIMIT) {
-            match hash_file(&candidate.path) {
+            match hash_file_with_policy(&candidate.path, cloud_policy) {
                 Ok(hash) => hashes.entry(hash).or_default().push(candidate),
                 Err(error) => push_warning(
                     warnings,
@@ -845,6 +924,14 @@ fn find_duplicate_groups(
 }
 
 pub(crate) fn hash_file(path: &Path) -> Result<String, String> {
+    hash_file_with_policy(path, &CloudFilePolicy::from_environment())
+}
+
+fn hash_file_with_policy(path: &Path, cloud_policy: &CloudFilePolicy) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if let Some(error) = cloud_policy.content_access_error(path, &metadata) {
+        return Err(error.to_string());
+    }
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut reader = BufReader::new(file);
     let mut hasher = Hasher::new();
@@ -1387,6 +1474,52 @@ mod tests {
         let result = clean_items(&["old-downloads".to_string(), "arbitrary-path".to_string()]);
         assert_eq!(result.removed_files, 0);
         assert_eq!(result.skipped.len(), 2);
+    }
+
+    #[test]
+    fn one_drive_files_are_refused_before_content_hashing() {
+        let root = temporary_large_file_root("onedrive-content-guard");
+        let one_drive = root.join("OneDrive");
+        fs::create_dir_all(&one_drive).expect("temporary OneDrive root should be created");
+        let path = one_drive.join("online.raw");
+        fs::write(&path, b"cloud contents must stay unopened").expect("temporary cloud file");
+        let policy = CloudFilePolicy::from_roots([one_drive]);
+
+        let result = hash_file_with_policy(&path, &policy);
+
+        assert!(result.is_err_and(|error| error.contains("metadata-only")));
+        fs::remove_dir_all(root).expect("temporary OneDrive root should be removed");
+    }
+
+    #[test]
+    fn one_drive_large_file_actions_are_refused() {
+        let root = temporary_large_file_root("onedrive-large-file-guard");
+        let one_drive = root.join("OneDrive");
+        fs::create_dir_all(&one_drive).expect("temporary OneDrive root should be created");
+        let path = one_drive.join("cached.raw");
+        fs::write(&path, b"locally cached cloud file").expect("temporary cloud file");
+        let canonical_root = fs::canonicalize(&root).expect("canonical temporary root");
+        let canonical_one_drive = fs::canonicalize(&one_drive).expect("canonical OneDrive root");
+        let canonical_path = fs::canonicalize(&path).expect("canonical cloud file");
+        let display_path = canonical_path.to_string_lossy().to_string();
+        let record = LargeFile {
+            name: "cached.raw".to_string(),
+            path: display_path.clone(),
+            size_bytes: 25,
+            last_used_days: Some(1),
+            modified_at: None,
+        };
+        let index = LargeFileIndex::from_scan(&canonical_root.to_string_lossy(), &[record]);
+        let policy = CloudFilePolicy::from_roots([canonical_one_drive]);
+
+        let result = index.validate_record_with_policy(
+            index.record_for(&display_path).expect("indexed cloud file"),
+            &policy,
+        );
+
+        assert!(result.is_err_and(|error| error.contains("leaves OneDrive files untouched")));
+        assert!(path.exists());
+        fs::remove_dir_all(root).expect("temporary OneDrive root should be removed");
     }
 
     #[test]

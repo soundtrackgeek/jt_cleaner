@@ -1,4 +1,5 @@
 mod ai;
+mod cloud_files;
 mod duplicates;
 mod history;
 mod latest_scan;

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.3] - 2026-07-15
+
+### Fixed
+
+- Keep whole-drive scans metadata-only for OneDrive: enumerate names, sizes, and Files On-Demand attributes without opening, hashing, downloading, pinning, dehydrating, or cleaning OneDrive files.
+- Count online-only OneDrive placeholders as 0 local bytes while reporting always-kept and temporarily cached files as locally present, with a scan warning that summarizes each residency state.
+- Refuse OneDrive content hashing and large-file actions at the backend boundary, including revalidation from detailed scans saved by an older release.
+
 ## [0.14.2] - 2026-07-15
 
 ### Fixed

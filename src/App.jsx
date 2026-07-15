@@ -68,6 +68,11 @@ const initialItems = [
     detail:
       "This is safe cache data that browsers can rebuild. It doesn’t include bookmarks, passwords, browsing history, or settings.",
     examples: "Cached images, scripts, favicons, and service worker cache.",
+    evidenceSources: [
+      { label: "Google Chrome", location: "Known profile cache folders" },
+      { label: "Microsoft Edge", location: "Known profile cache folders" },
+      { label: "Mozilla Firefox", location: "Known profile cache folders" },
+    ],
     selected: true,
   },
   {
@@ -84,6 +89,9 @@ const initialItems = [
     detail:
       "Only known cache and temporary paths are included. Threads, configuration, skills, and project files stay untouched.",
     examples: "Temporary downloads, generated cache entries, and disposable build state.",
+    evidenceSources: [
+      { label: "OpenAI Codex", location: "Known cache and temporary folders" },
+    ],
     selected: true,
   },
   {
@@ -100,6 +108,9 @@ const initialItems = [
     detail:
       "These files share identical content hashes, but you may still want an offline installer. Luna leaves every copy unselected by default.",
     examples: "Repeated .exe and .msi downloads with matching SHA-256 hashes.",
+    evidenceSources: [
+      { label: "Matching installer set", location: "Multiple scanned locations" },
+    ],
     selected: false,
   },
   {
@@ -116,6 +127,9 @@ const initialItems = [
     detail:
       "Age is a review signal, not proof that a file is disposable. Last-access timestamps can be incomplete on Windows, so Luna also considers modification dates.",
     examples: "Archives, media exports, and installers with no recent activity signal.",
+    evidenceSources: [
+      { label: "Downloads", location: "Your Downloads folder" },
+    ],
     selected: false,
   },
 ];
@@ -125,16 +139,19 @@ const findings = [
     title: "Caches are safe and rebuildable",
     body: "Browser and Codex caches total 8.3 GB. These are temporary files that apps will recreate as needed.",
     evidence: "5 sources",
+    evidenceDetail: "Known cache locations were measured locally and exclude browser profiles, settings, and personal data.",
   },
   {
     title: "Older files have low recent activity",
     body: "10.3 GB hasn’t been used in 90+ days. These are good candidates to review based on your activity.",
     evidence: "4 sources",
+    evidenceDetail: "File activity comes from Windows last-access metadata with modification time used as a fallback.",
   },
   {
     title: "Most space comes from stale downloads",
     body: "7.1 GB is in Downloads not opened in 90+ days. Consider keeping only current projects.",
     evidence: "3 sources",
+    evidenceDetail: "Age is a review signal only. Luna does not treat an older personal file as safe to delete.",
   },
 ];
 
@@ -156,6 +173,8 @@ function mapCleanupItem(item) {
     size: item.sizeBytes / 1024 ** 3,
     age: item.lastUsedDays ?? 0,
     date: item.lastUsedAt ? formatDateTime(item.lastUsedAt) : "Activity unknown",
+    evidenceCount: item.evidenceCount ?? item.evidenceSources?.length ?? 0,
+    evidenceSources: item.evidenceSources || [],
     selected: item.selectedByDefault,
     icon: cleanupIcons[item.id] || Document24Regular,
   };
@@ -250,6 +269,21 @@ function subtractAgeBytes(ageBuckets, lastUsedDays, sizeBytes) {
   return next;
 }
 
+function buildDuplicateEvidenceSources(duplicateGroups) {
+  return duplicateGroups.map((group) => {
+    const [first, ...rest] = group.files;
+    const location = first
+      ? `${first.path}${rest.length ? ` and ${rest.length} more ${rest.length === 1 ? "location" : "locations"}` : ""}`
+      : "No file locations recorded";
+    return {
+      label: `Exact match ${group.contentHash.slice(0, 8)}`,
+      location,
+      sizeBytes: group.reclaimableBytes,
+      fileCount: group.files.length,
+    };
+  });
+}
+
 function applyDuplicateDeletion(scanResult, deletedFiles) {
   if (!scanResult || !deletedFiles.length) return scanResult;
   const deletedPaths = new Set(deletedFiles.map((file) => file.path));
@@ -274,6 +308,7 @@ function applyDuplicateDeletion(scanResult, deletedFiles) {
     sizeBytes: duplicateBytes,
     fileCount: duplicateFileCount,
     evidenceCount: duplicateGroups.length,
+    evidenceSources: buildDuplicateEvidenceSources(duplicateGroups),
   } : item);
   const categories = scanResult.categories.map((category) => {
     const removed = deletedDetails.filter((file) => categoryContainsFile(category.path, scanResult.root, file.path));
@@ -319,6 +354,7 @@ function applyLargeFileDeletion(scanResult, deletedFiles) {
     sizeBytes: duplicateBytes,
     fileCount: duplicateFileCount,
     evidenceCount: duplicateGroups.length,
+    evidenceSources: buildDuplicateEvidenceSources(duplicateGroups),
   } : item);
   const categories = scanResult.categories.map((category) => {
     const removed = deletedDetails.filter((file) => categoryContainsFile(category.path, scanResult.root, file.path));
@@ -361,9 +397,37 @@ function NavItem({ item, active, onClick }) {
   );
 }
 
+function EvidenceSourceList({ sources }) {
+  return (
+    <ul className="evidence-source-list">
+      {sources.map((source, index) => (
+        <li key={`${source.label}-${source.location}-${index}`}>
+          <div>
+            <strong>{source.label}</strong>
+            <span title={source.location}>{source.location}</span>
+          </div>
+          {(source.sizeBytes != null || source.fileCount != null) && (
+            <div className="evidence-source-metrics">
+              {source.sizeBytes != null && <strong>{formatBytes(source.sizeBytes)}</strong>}
+              {source.fileCount != null && (
+                <span>{source.fileCount.toLocaleString()} {source.fileCount === 1 ? "file" : "files"}</span>
+              )}
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function CleanupRow({ item, expanded, onExpand, onSelect }) {
   const Icon = item.icon;
   const review = item.group === "review";
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
+  const evidenceSources = item.evidenceSources || [];
+  const sourceCount = evidenceSources.length || item.evidenceCount || 0;
+  const sourceLabel = `${sourceCount} ${sourceCount === 1 ? "source" : "sources"}`;
+  const sourcesId = `cleanup-sources-${item.id}`;
   return (
     <div className={`cleanup-row-wrap ${expanded ? "is-expanded" : ""}`}>
       <div className="cleanup-row">
@@ -405,18 +469,72 @@ function CleanupRow({ item, expanded, onExpand, onSelect }) {
       {expanded && (
         <div className="evidence-row">
           <span className={`evidence-accent ${review ? "is-review" : ""}`} />
-          <div>
+          <div className="evidence-copy">
             <p>{item.detail}</p>
             <span>Examples: {item.examples}</span>
           </div>
-          <button className="evidence-link" type="button">
+          <button
+            className="evidence-link"
+            type="button"
+            onClick={() => setSourcesExpanded((current) => !current)}
+            aria-expanded={sourcesExpanded}
+            aria-controls={sourcesId}
+            aria-label={`${sourcesExpanded ? "Hide" : "Show"} ${sourceLabel} for ${item.name}`}
+          >
             <Document24Regular aria-hidden="true" />
-            3 sources
-            <ChevronRight20Regular aria-hidden="true" />
+            {sourceLabel}
+            {sourcesExpanded ? <ChevronDown20Regular aria-hidden="true" /> : <ChevronRight20Regular aria-hidden="true" />}
           </button>
+          {sourcesExpanded && (
+            <div className="evidence-sources" id={sourcesId} role="region" aria-label={`Sources for ${item.name}`}>
+              <div className="evidence-sources-heading">
+                <strong>Included in this scan</strong>
+                <span>Location, measured size, and file count</span>
+              </div>
+              {evidenceSources.length ? (
+                <EvidenceSourceList sources={evidenceSources} />
+              ) : (
+                <p className="evidence-sources-empty">
+                  {sourceCount > 0
+                    ? "Detailed source locations were not stored in this saved scan. Run a new scan to inspect them."
+                    : "No source locations were found for this item."}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function FindingRow({ finding, index }) {
+  const [evidenceExpanded, setEvidenceExpanded] = useState(false);
+  const evidenceId = `finding-evidence-${index}`;
+  return (
+    <li>
+      <span className="finding-number">{index + 1}</span>
+      <div>
+        <h3>{finding.title}</h3>
+        <p>{finding.body}</p>
+        <button
+          type="button"
+          onClick={() => setEvidenceExpanded((current) => !current)}
+          aria-expanded={evidenceExpanded}
+          aria-controls={evidenceId}
+        >
+          <Document24Regular aria-hidden="true" />
+          Evidence: {finding.evidence}
+          {evidenceExpanded ? <ChevronDown20Regular aria-hidden="true" /> : <ChevronRight20Regular aria-hidden="true" />}
+        </button>
+        {evidenceExpanded && (
+          <div className="finding-evidence-detail" id={evidenceId} role="region" aria-label={`Evidence for ${finding.title}`}>
+            <p>{finding.evidenceDetail || `This finding is supported by ${finding.evidence}.`}</p>
+            {finding.evidenceSources?.length > 0 && <EvidenceSourceList sources={finding.evidenceSources} />}
+          </div>
+        )}
+      </div>
+    </li>
   );
 }
 
@@ -504,7 +622,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.14.0");
+  const [appVersion, setAppVersion] = useState("0.14.1");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -520,7 +638,7 @@ export function App() {
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.14.0", availableVersion: "", progress: 0, message: "" });
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.14.1", availableVersion: "", progress: 0, message: "" });
   const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
   const updateCheckInFlightRef = useRef(false);
@@ -1133,11 +1251,14 @@ export function App() {
   const usedPercent = currentRoot?.totalBytes
     ? ((currentRoot.totalBytes - currentRoot.availableBytes) / currentRoot.totalBytes) * 100
     : 62;
+  const safeEvidenceSources = safeItems.flatMap((item) => item.evidenceSources || []);
+  const duplicateEvidence = reviewItems.find((item) => item.id === "duplicate-files");
   const liveFindings = aiReport
     ? aiReport.report.findings.map((finding) => ({
         title: finding.title,
         body: finding.detail,
         evidence: `${finding.evidence} · ${finding.confidence} confidence`,
+        evidenceDetail: `Luna cited ${finding.evidence} and assigned ${finding.confidence} confidence to this finding.`,
       }))
     : scanResult
       ? [
@@ -1145,16 +1266,21 @@ export function App() {
           title: "Caches are isolated from personal data",
           body: `${formatBytes(safeItems.reduce((sum, item) => sum + (item.sizeBytes || 0), 0))} sits in known rebuildable cache paths.`,
           evidence: `${safeItems.reduce((sum, item) => sum + (item.evidenceCount || 0), 0)} sources`,
+          evidenceDetail: "Known cache and temporary locations were measured locally. Browser profiles, settings, threads, and project files are excluded.",
+          evidenceSources: safeEvidenceSources,
         },
         {
           title: "Older files have low recent activity",
           body: `${formatBytes(scanResult.ageBuckets.inactive90To180Bytes + scanResult.ageBuckets.inactive180PlusBytes)} has no activity signal in 90+ days.`,
           evidence: "scan metadata",
+          evidenceDetail: "This uses Windows last-access timestamps with modification time as a fallback. Age is evidence for review, not proof that a file is disposable.",
         },
         {
           title: "Exact copies are ready for review",
           body: `${scanResult.duplicateGroups.length} content-hash groups can be inspected without assuming which copy should be kept.`,
           evidence: "BLAKE3 hashes",
+          evidenceDetail: "Files in each group produced the same BLAKE3 content hash. Luna keeps the choice of which location to retain with you.",
+          evidenceSources: duplicateEvidence?.evidenceSources || [],
         },
         ]
       : findings;
@@ -1297,18 +1423,7 @@ export function App() {
         </button>
         {aiReport?.report.answer && <p className="ai-answer">{aiReport.report.answer}</p>}
         <ol className="findings-list">
-          {liveFindings.map((finding, index) => (
-            <li key={finding.title}>
-              <span className="finding-number">{index + 1}</span>
-              <div>
-                <h3>{finding.title}</h3>
-                <p>{finding.body}</p>
-                <button type="button">
-                  <Document24Regular /> Evidence: {finding.evidence} <ChevronRight20Regular />
-                </button>
-              </div>
-            </li>
-          ))}
+          {liveFindings.map((finding, index) => <FindingRow key={finding.title} finding={finding} index={index} />)}
         </ol>
         <div className="age-chart">
           <h3>Age distribution <span>(all reviewed items)</span></h3>

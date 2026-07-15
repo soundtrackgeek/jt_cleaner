@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1] - 2026-07-15
+
+### Fixed
+
+- Make cleanup evidence source counts clickable and show the actual scanned locations with their measured size and file count instead of a hard-coded source total.
+- Make the evidence controls in Luna's findings reveal their supporting explanation and available source locations.
+
 ## [0.14.0] - 2026-07-14
 
 ### Added

@@ -1,6 +1,7 @@
 use crate::models::{
-    AgeBuckets, CleanupItem, CleanupResult, DeletedLargeFile, DuplicateFile, DuplicateGroup,
-    LargeFile, LargeFileDeleteResult, ScanProgress, ScanResult, ScanRootInfo, StorageCategory,
+    AgeBuckets, CleanupEvidenceSource, CleanupItem, CleanupResult, DeletedLargeFile, DuplicateFile,
+    DuplicateGroup, LargeFile, LargeFileDeleteResult, ScanProgress, ScanResult, ScanRootInfo,
+    StorageCategory,
 };
 use blake3::Hasher;
 use chrono::{DateTime, Local, SecondsFormat};
@@ -872,10 +873,19 @@ fn build_cleanup_items(
         .filter(|target| target.category == "temp-files")
         .collect();
 
-    let browser_stats = combine_target_stats(&browser, warnings);
-    let codex_stats = combine_target_stats(&codex, warnings);
-    let temp_stats = combine_target_stats(&temporary, warnings);
-    let old_download_stats = scan_old_downloads(now, warnings);
+    let (browser_stats, browser_evidence) = collect_target_evidence(&browser, warnings);
+    let (codex_stats, codex_evidence) = collect_target_evidence(&codex, warnings);
+    let (temp_stats, temp_evidence) = collect_target_evidence(&temporary, warnings);
+    let old_download_path = dirs::download_dir();
+    let old_download_stats = old_download_path
+        .as_deref()
+        .map(|path| scan_old_downloads(path, now, warnings))
+        .unwrap_or_default();
+    let old_download_evidence = old_download_path
+        .as_deref()
+        .map(|path| evidence_source("Downloads", path, &old_download_stats))
+        .into_iter()
+        .collect();
     let duplicate_bytes = duplicates.iter().fold(0_u64, |sum, group| {
         sum.saturating_add(group.reclaimable_bytes)
     });
@@ -897,7 +907,7 @@ fn build_cleanup_items(
             "Cached images, scripts, favicons, code cache, and GPU cache.",
             "High",
             true,
-            browser.len(),
+            browser_evidence,
         ),
         cleanup_item(
             "codex-cache",
@@ -911,7 +921,7 @@ fn build_cleanup_items(
             "Temporary downloads, cached generated data, and disposable runtime files.",
             "High",
             true,
-            codex.len(),
+            codex_evidence,
         ),
         cleanup_item(
             "temp-files",
@@ -925,7 +935,7 @@ fn build_cleanup_items(
             "Expired extraction folders, transient logs, and application scratch files.",
             "High",
             true,
-            temporary.len(),
+            temp_evidence,
         ),
         CleanupItem {
             id: "duplicate-files".to_string(),
@@ -942,6 +952,7 @@ fn build_cleanup_items(
             confidence: "Medium".to_string(),
             selected_by_default: false,
             evidence_count: duplicates.len(),
+            evidence_sources: duplicate_evidence_sources(duplicates),
         },
         cleanup_item(
             "old-downloads",
@@ -955,7 +966,7 @@ fn build_cleanup_items(
             "Archives, media exports, documents, and installers.",
             "Low",
             false,
-            1,
+            old_download_evidence,
         ),
     ]
 }
@@ -973,8 +984,9 @@ fn cleanup_item(
     examples: &str,
     confidence: &str,
     selected_by_default: bool,
-    evidence_count: usize,
+    evidence_sources: Vec<CleanupEvidenceSource>,
 ) -> CleanupItem {
+    let evidence_count = evidence_sources.len();
     CleanupItem {
         id: id.to_string(),
         group: group.to_string(),
@@ -990,6 +1002,7 @@ fn cleanup_item(
         confidence: confidence.to_string(),
         selected_by_default: selected_by_default && stats.size_bytes > 0,
         evidence_count,
+        evidence_sources,
     }
 }
 
@@ -1101,16 +1114,59 @@ fn codex_home() -> Option<PathBuf> {
         .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
 }
 
-fn combine_target_stats(targets: &[&CacheTarget], warnings: &mut Vec<String>) -> PathStats {
+fn collect_target_evidence(
+    targets: &[&CacheTarget],
+    warnings: &mut Vec<String>,
+) -> (PathStats, Vec<CleanupEvidenceSource>) {
     let mut combined = PathStats::default();
+    let mut evidence = Vec::with_capacity(targets.len());
     for target in targets {
         let stats = collect_path_stats(&target.path, warnings);
         combined.size_bytes = combined.size_bytes.saturating_add(stats.size_bytes);
         combined.file_count = combined.file_count.saturating_add(stats.file_count);
         combined.newest_activity = newest_time(combined.newest_activity, stats.newest_activity);
         combined.oldest_activity = oldest_time(combined.oldest_activity, stats.oldest_activity);
+        evidence.push(evidence_source(target.source, &target.path, &stats));
     }
-    combined
+    (combined, evidence)
+}
+
+fn evidence_source(label: &str, path: &Path, stats: &PathStats) -> CleanupEvidenceSource {
+    CleanupEvidenceSource {
+        label: label.to_string(),
+        location: path.to_string_lossy().to_string(),
+        size_bytes: stats.size_bytes,
+        file_count: stats.file_count,
+    }
+}
+
+fn duplicate_evidence_sources(duplicates: &[DuplicateGroup]) -> Vec<CleanupEvidenceSource> {
+    duplicates
+        .iter()
+        .map(|group| {
+            let hash = group.content_hash.get(..8).unwrap_or(&group.content_hash);
+            let location = match group.files.as_slice() {
+                [] => "No file locations recorded".to_string(),
+                [file] => file.path.clone(),
+                [first, rest @ ..] => format!(
+                    "{} and {} more {}",
+                    first.path,
+                    rest.len(),
+                    if rest.len() == 1 {
+                        "location"
+                    } else {
+                        "locations"
+                    }
+                ),
+            };
+            CleanupEvidenceSource {
+                label: format!("Exact match {hash}"),
+                location,
+                size_bytes: group.reclaimable_bytes,
+                file_count: group.files.len() as u64,
+            }
+        })
+        .collect()
 }
 
 fn collect_path_stats(path: &Path, warnings: &mut Vec<String>) -> PathStats {
@@ -1138,11 +1194,7 @@ fn collect_path_stats(path: &Path, warnings: &mut Vec<String>) -> PathStats {
     stats
 }
 
-fn scan_old_downloads(now: SystemTime, warnings: &mut Vec<String>) -> PathStats {
-    let Some(downloads) = dirs::download_dir() else {
-        return PathStats::default();
-    };
-
+fn scan_old_downloads(downloads: &Path, now: SystemTime, warnings: &mut Vec<String>) -> PathStats {
     let mut stats = PathStats::default();
     for entry in WalkDir::new(downloads).follow_links(false).into_iter() {
         let entry = match entry {
@@ -1326,6 +1378,45 @@ mod tests {
         let result = clean_items(&["old-downloads".to_string(), "arbitrary-path".to_string()]);
         assert_eq!(result.removed_files, 0);
         assert_eq!(result.skipped.len(), 2);
+    }
+
+    #[test]
+    fn cleanup_evidence_reports_each_location_and_combined_totals() {
+        let root = temporary_large_file_root("cleanup-evidence");
+        let chrome = root.join("Chrome").join("Cache");
+        let edge = root.join("Edge").join("Cache");
+        fs::create_dir_all(&chrome).expect("Chrome cache should be created");
+        fs::create_dir_all(&edge).expect("Edge cache should be created");
+        fs::write(chrome.join("cached-image"), b"abc").expect("Chrome cache file");
+        fs::write(edge.join("cached-script"), b"12345").expect("Edge cache file");
+        let targets = [
+            CacheTarget {
+                category: "browser-cache",
+                source: "Google Chrome",
+                path: chrome.clone(),
+            },
+            CacheTarget {
+                category: "browser-cache",
+                source: "Microsoft Edge",
+                path: edge.clone(),
+            },
+        ];
+        let target_refs = targets.iter().collect::<Vec<_>>();
+        let mut warnings = Vec::new();
+
+        let (combined, evidence) = collect_target_evidence(&target_refs, &mut warnings);
+
+        assert!(warnings.is_empty());
+        assert_eq!(combined.size_bytes, 8);
+        assert_eq!(combined.file_count, 2);
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(evidence[0].label, "Google Chrome");
+        assert_eq!(evidence[0].location, chrome.to_string_lossy());
+        assert_eq!(evidence[0].size_bytes, 3);
+        assert_eq!(evidence[1].label, "Microsoft Edge");
+        assert_eq!(evidence[1].location, edge.to_string_lossy());
+        assert_eq!(evidence[1].size_bytes, 5);
+        fs::remove_dir_all(root).expect("temporary evidence root should be removed");
     }
 
     #[test]

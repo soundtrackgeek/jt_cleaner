@@ -93,6 +93,15 @@ pub struct DuplicateGroup {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CleanupEvidenceSource {
+    pub label: String,
+    pub location: String,
+    pub size_bytes: u64,
+    pub file_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CleanupItem {
     pub id: String,
     pub group: String,
@@ -108,6 +117,8 @@ pub struct CleanupItem {
     pub confidence: String,
     pub selected_by_default: bool,
     pub evidence_count: usize,
+    #[serde(default)]
+    pub evidence_sources: Vec<CleanupEvidenceSource>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

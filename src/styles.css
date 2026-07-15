@@ -261,6 +261,10 @@ input:focus-visible {
   gap: 9px;
 }
 
+.snapshot-limited-state {
+  min-height: 300px;
+}
+
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

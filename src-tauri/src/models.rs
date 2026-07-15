@@ -139,6 +139,10 @@ pub struct ScanResult {
     pub scanned_at: String,
     pub duration_ms: u128,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_duplicate_reclaimable_bytes: Option<u64>,
 }
 
 impl ScanResult {

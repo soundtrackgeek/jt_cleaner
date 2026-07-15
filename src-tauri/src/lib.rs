@@ -7,6 +7,7 @@ mod scanner;
 mod schedule;
 mod settings;
 
+use chrono::DateTime;
 use models::{
     CleanupRequest, CleanupResult, DuplicateGroup, LargeFileDeleteRequest, LargeFileDeleteResult,
     ScanProgress, ScanResult, ScanRootInfo, StorageCategory,
@@ -94,26 +95,132 @@ fn get_latest_scan(
     app: AppHandle,
     state: State<'_, RuntimeState>,
 ) -> Result<Option<ScanResult>, String> {
-    let Some(output) = latest_scan::load(&latest_scan_file(&app)?)? else {
+    let detailed = latest_scan::load(&latest_scan_file(&app)?)?;
+    let aggregate =
+        history::load_latest_snapshot(&history_file(&app)?, &snapshot_candidate_roots(&app))?;
+
+    if let Some(mut output) = detailed
+        && aggregate.as_ref().is_none_or(|snapshot| {
+            captured_at_is_at_least(&output.result.scanned_at, &snapshot.snapshot.captured_at)
+        })
+    {
+        output.result.snapshot_detail = Some("detailed".to_string());
+        output.result.snapshot_duplicate_reclaimable_bytes = Some(
+            output
+                .result
+                .duplicate_groups
+                .iter()
+                .map(|group| group.reclaimable_bytes)
+                .sum(),
+        );
+        restore_scan_indexes(&state, &output.result, output.storage_index)?;
+        return Ok(Some(output.result));
+    }
+
+    let Some(snapshot) = aggregate else {
         return Ok(None);
     };
-    let large_file_index =
-        scanner::LargeFileIndex::from_scan(&output.result.root, &output.result.large_files);
+    let result = scan_result_from_snapshot(snapshot);
+    let storage_index = scanner::StorageIndex::from_snapshot(&result.root, &result.categories);
+    restore_scan_indexes(&state, &result, storage_index)?;
+    Ok(Some(result))
+}
+
+fn restore_scan_indexes(
+    state: &RuntimeState,
+    result: &ScanResult,
+    storage_index: scanner::StorageIndex,
+) -> Result<(), String> {
+    let large_file_index = scanner::LargeFileIndex::from_scan(&result.root, &result.large_files);
     *state
         .duplicate_groups
         .write()
         .map_err(|_| "The duplicate scan index is unavailable.".to_string())? =
-        output.result.duplicate_groups.clone();
+        result.duplicate_groups.clone();
     *state
         .storage_index
         .write()
-        .map_err(|_| "The storage explorer index is unavailable.".to_string())? =
-        output.storage_index;
+        .map_err(|_| "The storage explorer index is unavailable.".to_string())? = storage_index;
     *state
         .large_file_index
         .write()
         .map_err(|_| "The large-file scan index is unavailable.".to_string())? = large_file_index;
-    Ok(Some(output.result))
+    Ok(())
+}
+
+fn snapshot_candidate_roots(app: &AppHandle) -> Vec<String> {
+    let mut roots = Vec::new();
+    let mut add_root = |root: String| {
+        if !root.trim().is_empty() && !roots.contains(&root) {
+            roots.push(root);
+        }
+    };
+
+    if let Ok(path) = settings_file(app)
+        && let Ok(settings) = settings::load(&path)
+        && let Some(root) = settings.default_scan_root
+    {
+        add_root(root);
+    }
+    if let Ok(path) = schedule_file(app)
+        && let Ok(schedule) = schedule::load(&path)
+        && let Some(root) = schedule.scan_root
+    {
+        add_root(root);
+    }
+    for root in scanner::list_scan_roots() {
+        add_root(root.path);
+    }
+    roots
+}
+
+fn scan_result_from_snapshot(restorable: history::RestorableSnapshot) -> ScanResult {
+    let snapshot = restorable.snapshot;
+    let categories = snapshot
+        .categories
+        .iter()
+        .map(|category| StorageCategory {
+            name: category.name.clone(),
+            path: std::path::Path::new(&restorable.root)
+                .join(&category.name)
+                .to_string_lossy()
+                .to_string(),
+            size_bytes: category.size_bytes,
+            file_count: category.file_count,
+            last_used_days: category.last_used_days,
+            can_drill_down: false,
+        })
+        .collect();
+
+    ScanResult {
+        root: restorable.root,
+        root_name: restorable.root_name,
+        total_bytes: snapshot.total_bytes,
+        drive_total_bytes: None,
+        drive_used_bytes: None,
+        file_count: snapshot.file_count,
+        folder_count: snapshot.folder_count,
+        categories,
+        large_files: Vec::new(),
+        duplicate_groups: Vec::new(),
+        cleanup_items: Vec::new(),
+        age_buckets: snapshot.age_buckets,
+        scanned_at: snapshot.captured_at,
+        duration_ms: 0,
+        warnings: Vec::new(),
+        snapshot_detail: Some("aggregate".to_string()),
+        snapshot_duplicate_reclaimable_bytes: Some(snapshot.duplicate_reclaimable_bytes),
+    }
+}
+
+fn captured_at_is_at_least(left: &str, right: &str) -> bool {
+    match (
+        DateTime::parse_from_rfc3339(left),
+        DateTime::parse_from_rfc3339(right),
+    ) {
+        (Ok(left), Ok(right)) => left >= right,
+        _ => left >= right,
+    }
 }
 
 #[tauri::command]
@@ -655,6 +762,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use models::AgeBuckets;
 
     #[test]
     fn tray_guard_allows_explicit_quit_and_updater_restart() {
@@ -670,5 +778,39 @@ mod tests {
         assert!(flags.contains(StateFlags::POSITION));
         assert!(flags.contains(StateFlags::MAXIMIZED));
         assert!(!flags.contains(StateFlags::VISIBLE));
+    }
+
+    #[test]
+    fn aggregate_snapshot_becomes_a_read_only_scan_result() {
+        let restored = scan_result_from_snapshot(history::RestorableSnapshot {
+            root: r"C:\".to_string(),
+            root_name: "Local Disk (C:)".to_string(),
+            snapshot: history::StorageSnapshot {
+                captured_at: "2026-07-15T10:07:18+02:00".to_string(),
+                total_bytes: 470_306_152_448,
+                file_count: 1_379_108,
+                folder_count: 315_579,
+                categories: vec![history::SnapshotCategory {
+                    id: "saved-id".to_string(),
+                    name: "Users".to_string(),
+                    size_bytes: 42,
+                    file_count: 2,
+                    last_used_days: Some(1),
+                }],
+                age_buckets: AgeBuckets::default(),
+                cleanup_signals: Vec::new(),
+                duplicate_reclaimable_bytes: 1_048_576,
+            },
+        });
+
+        assert_eq!(restored.snapshot_detail.as_deref(), Some("aggregate"));
+        assert_eq!(
+            restored.snapshot_duplicate_reclaimable_bytes,
+            Some(1_048_576)
+        );
+        assert_eq!(restored.categories[0].path, r"C:\Users");
+        assert!(!restored.categories[0].can_drill_down);
+        assert!(restored.large_files.is_empty());
+        assert!(restored.duplicate_groups.is_empty());
     }
 }

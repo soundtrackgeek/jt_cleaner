@@ -1,6 +1,6 @@
 [package]
 name = "luna-clean"
-version = "0.14.1"
+version = "0.14.2"
 description = "A careful, AI-assisted Windows storage cleaner"
 authors = ["Luna Clean contributors"]
 edition = "2024"

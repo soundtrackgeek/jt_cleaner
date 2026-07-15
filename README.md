@@ -4,14 +4,14 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.14.1` makes evidence controls actionable. Cleanup source counts now open the actual scanned locations with their measured size and file count, and Luna's finding evidence controls reveal their supporting context.
+Version `0.14.2` restores the newest available snapshot even when an update or still-running older tray process did not create the detailed latest-scan cache. Aggregate snapshots reopen with their saved totals and a clear prompt to rescan for file-level details.
 
 ### Included
 
 - Responsive Windows 11 Fluent-style cleanup review plus Overview, Scan results, Trends, Storage explorer, Duplicates, Large files, Schedule, and Settings surfaces.
 - Folder and drive discovery with native directory selection.
 - A persistent default scan location that is restored whenever the interface opens.
-- Automatic restoration of one locally saved latest detailed scan, including Storage explorer drill-down, duplicate groups, and Large files, after the window or app restarts.
+- Automatic restoration of the newest locally saved scan after the window or app restarts, preferring the detailed cache and falling back to aggregate trend history when needed.
 - A dated snapshot warning and **Run a new scan** action on restored Scan results, Storage explorer, Duplicates, and Large files views.
 - Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
 - Top-level storage aggregation, selectable large-file ranking, and activity-age buckets.
@@ -69,7 +69,7 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 2. Open **Scan results**, **Storage explorer**, **Duplicates**, or **Large files**.
 3. Choose the default home folder or a detected drive in **Settings**; Luna remembers that default across restarts. Use **Choose folder** for a one-time custom location.
 4. Start the scan and keep the app open while Luna reports progress.
-5. After reopening Luna, those four scan views show the latest saved scan with its date and time. Use **Run a new scan** from the warning whenever you want current filesystem data.
+5. After reopening Luna, those four scan views show the latest saved scan with its date and time. An older aggregate-only snapshot restores Scan Results, top-level Storage explorer totals, and duplicate opportunity; use **Run a new scan** to rebuild drill-down and file-level Duplicates or Large Files lists.
 6. In **Storage explorer**, select a folder in either the map or Largest areas list to see the folders and direct files immediately inside it. Use **Back** or an earlier breadcrumb to move up again.
 7. Review findings in **Cleanup review**. Expand an item, then select its source count to inspect the scanned locations, measured size, and file count. Safe caches are selected only when data exists; duplicate files, large files, and old Downloads are never selected automatically.
 8. In **Duplicates**, select only the exact copies you want to remove. Luna keeps at least one verified copy, re-hashes every selected file before deletion, and lets you ask AI about any copy's location and risk.

@@ -37,14 +37,27 @@ function EmptyScan({ onScan, onChooseFolder }) {
 }
 
 function SnapshotWarning({ result, onScan }) {
+  const aggregateOnly = result.snapshotDetail === "aggregate";
   return (
     <section className="snapshot-warning" role="status">
       <Warning24Regular />
       <div>
-        <strong>Showing the latest saved snapshot</strong>
-        <span>This snapshot is from {formatDateTime(result.scannedAt)}. Files may have changed since then.</span>
+        <strong>{aggregateOnly ? "Showing the latest aggregate snapshot" : "Showing the latest saved snapshot"}</strong>
+        <span>{aggregateOnly
+          ? `This snapshot is from ${formatDateTime(result.scannedAt)}. It retained storage totals, but not file-level lists.`
+          : `This snapshot is from ${formatDateTime(result.scannedAt)}. Files may have changed since then.`}</span>
       </div>
       <button className="secondary-button" type="button" onClick={onScan}><ArrowSync24Regular /> Run a new scan</button>
+    </section>
+  );
+}
+
+function AggregateDetailUnavailable({ icon, title, description }) {
+  return (
+    <section className="empty-state-surface snapshot-limited-state">
+      {icon}
+      <h2>{title}</h2>
+      <p>{description}</p>
     </section>
   );
 }
@@ -139,6 +152,8 @@ export function OverviewView({ result, scanning, progress, onScan, onChooseFolde
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
   const reclaimable = result.cleanupItems.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const aggregateOnly = result.snapshotDetail === "aggregate";
+  const duplicateOpportunity = result.snapshotDuplicateReclaimableBytes || 0;
   const scanUsage = getScanUsage(result);
   return (
     <div className="feature-view">
@@ -151,8 +166,8 @@ export function OverviewView({ result, scanning, progress, onScan, onChooseFolde
       <section className="summary-strip">
         <div><span>{scanUsage.isDrive ? "Windows drive usage" : "Scanned data"}</span><strong>{formatBytes(scanUsage.usedBytes)}</strong><small>{scanUsage.isDrive ? `${formatBytes(scanUsage.totalBytes)} total` : `${formatCount(result.folderCount)} folders`}</small></div>
         <div><span>Potential review</span><strong>{formatBytes(reclaimable)}</strong><small>{result.cleanupItems.length} cleanup signals</small></div>
-        <div><span>Exact duplicates</span><strong>{result.duplicateGroups.length}</strong><small>Content-hash groups</small></div>
-        <div><span>Scan time</span><strong>{formatDuration(result.durationMs)}</strong><small>{formatDateTime(result.scannedAt)}</small></div>
+        <div><span>{aggregateOnly ? "Duplicate opportunity" : "Exact duplicates"}</span><strong>{aggregateOnly ? formatBytes(duplicateOpportunity) : result.duplicateGroups.length}</strong><small>{aggregateOnly ? "Aggregate snapshot total" : "Content-hash groups"}</small></div>
+        <div><span>{aggregateOnly ? "Snapshot" : "Scan time"}</span><strong>{aggregateOnly ? "Saved" : formatDuration(result.durationMs)}</strong><small>{formatDateTime(result.scannedAt)}</small></div>
       </section>
       <CategoryTable result={result} limit={8} />
       <AgeDistribution result={result} />
@@ -174,7 +189,7 @@ export function ScanResultsView({ result, fromSnapshot, scanning, progress, erro
       {error && <div className="inline-error"><Warning24Regular />{error}</div>}
       {!result ? <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} /> : (
         <>
-          <section className="scan-summary-line"><CheckmarkCircle24Regular /><div><strong>Completed in {formatDuration(result.durationMs)}</strong><span>{formatCount(result.fileCount)} files · {formatScanSize(result)} · {result.warnings.length} warnings</span></div><time>{formatDateTime(result.scannedAt)}</time></section>
+          <section className="scan-summary-line"><CheckmarkCircle24Regular /><div><strong>{result.snapshotDetail === "aggregate" ? "Aggregate snapshot restored" : `Completed in ${formatDuration(result.durationMs)}`}</strong><span>{formatCount(result.fileCount)} files · {formatScanSize(result)} · {result.snapshotDetail === "aggregate" ? `${result.categories.length} saved areas` : `${result.warnings.length} warnings`}</span></div><time>{formatDateTime(result.scannedAt)}</time></section>
           <CategoryTable result={result} limit={24} />
           {result.warnings.length > 0 && <section className="feature-surface warning-list"><h2>Skipped safely</h2>{result.warnings.map((warning) => <p key={warning}><Warning24Regular />{warning}</p>)}</section>}
         </>
@@ -201,7 +216,7 @@ export function StorageView({ result, fromSnapshot, scanning, progress, onScan, 
     setTrail([rootLocation]);
     setAreas(result.categories);
     setNavigationError("");
-    if (!onLoadAreas) return undefined;
+    if (!onLoadAreas || result.snapshotDetail === "aggregate") return undefined;
 
     setLoadingPath(true);
     onLoadAreas(result.root)
@@ -275,7 +290,7 @@ export function StorageView({ result, fromSnapshot, scanning, progress, onScan, 
           </nav>
           {loadingPath && <span className="storage-path-status" role="status">Opening…</span>}
         </div>
-        <div className="surface-heading"><div><h2>Storage map</h2><p>Area is proportional to the folder’s scanned size. Select a folder to explore it.</p></div><strong>{trail.length === 1 ? formatScanSize(result) : formatBytes(measuredTotal)}</strong></div>
+        <div className="surface-heading"><div><h2>Storage map</h2><p>{result.snapshotDetail === "aggregate" ? "Area is proportional to the top-level totals retained in this snapshot." : "Area is proportional to the folder’s scanned size. Select a folder to explore it."}</p></div><strong>{trail.length === 1 ? formatScanSize(result) : formatBytes(measuredTotal)}</strong></div>
         {navigationError && <div className="inline-error storage-navigation-error"><Warning24Regular />{navigationError}</div>}
         <div className={`treemap ${loadingPath ? "is-loading" : ""}`} role="group" aria-label={`Proportional storage map for ${currentLocation.path}`}>
           {displayed.map((category, index) => category.canDrillDown ? (
@@ -298,12 +313,30 @@ export function StorageView({ result, fromSnapshot, scanning, progress, onScan, 
 export function DuplicatesView({ result, fromSnapshot, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
+  if (result.snapshotDetail === "aggregate") {
+    return (
+      <div className="feature-view">
+        <FeatureHeader eyebrow="Duplicates" title="Duplicate opportunity from the snapshot" description={result.root} action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Scan another folder</button>} />
+        <SnapshotWarning result={result} onScan={onScan} />
+        <AggregateDetailUnavailable icon={<DocumentCopy24Regular />} title={`${formatBytes(result.snapshotDuplicateReclaimableBytes || 0)} in duplicate opportunity was recorded`} description="This aggregate snapshot did not retain content hashes or copy paths, so Luna cannot safely list or select duplicate files until you run a new scan." />
+      </div>
+    );
+  }
   return <DuplicateFilesPanel result={result} notice={fromSnapshot ? <SnapshotWarning result={result} onScan={onScan} /> : null} onChooseFolder={onChooseFolder} onDeleteFiles={onDeleteFiles} onAskAi={onAskAi} />;
 }
 
 export function LargeFilesView({ result, fromSnapshot, scanning, progress, onScan, onChooseFolder, onDeleteFiles, onAskAi }) {
   if (scanning) return <ScanProgress progress={progress} />;
   if (!result) return <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} />;
+  if (result.snapshotDetail === "aggregate") {
+    return (
+      <div className="feature-view">
+        <FeatureHeader eyebrow="Large files" title="Large-file details need a new scan" description={result.root} action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Scan another folder</button>} />
+        <SnapshotWarning result={result} onScan={onScan} />
+        <AggregateDetailUnavailable icon={<Document24Regular />} title="The snapshot retained storage totals, not the Large Files list" description="Run a new scan to rebuild the current file ranking before reviewing, asking AI about, or deleting any large file." />
+      </div>
+    );
+  }
   return (
     <div className="feature-view">
       <FeatureHeader eyebrow="Large files" title="The files with the biggest footprint" description="Select files when you want to remove them, or ask Luna for a cautious metadata-only opinion first. Nothing is preselected." action={<button className="secondary-button" type="button" onClick={onChooseFolder}>Choose another folder</button>} />

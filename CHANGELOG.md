@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2] - 2026-07-15
+
+### Fixed
+
+- Restore the newest aggregate trend snapshot when no detailed latest-scan cache exists or when the aggregate snapshot is newer, instead of returning to the **Scan default folder** screen.
+- Keep aggregate-only Duplicates and Large Files views read-only and clearly identify which file-level details require a new scan.
+
 ## [0.14.1] - 2026-07-15
 
 ### Fixed

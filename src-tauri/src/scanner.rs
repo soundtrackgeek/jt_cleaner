@@ -50,6 +50,13 @@ pub(crate) struct StorageIndex {
 }
 
 impl StorageIndex {
+    pub(crate) fn from_snapshot(root: &str, categories: &[StorageCategory]) -> Self {
+        Self {
+            root: root.to_string(),
+            children: HashMap::from([(root.to_string(), categories.to_vec())]),
+        }
+    }
+
     fn from_accumulators(
         root: &Path,
         accumulators: StorageAreaAccumulators,
@@ -572,6 +579,8 @@ where
             scanned_at: format_time(SystemTime::now()),
             duration_ms: started.elapsed().as_millis(),
             warnings,
+            snapshot_detail: None,
+            snapshot_duplicate_reclaimable_bytes: None,
         },
         storage_index,
     })

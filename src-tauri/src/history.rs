@@ -49,6 +49,13 @@ pub struct TrendHistory {
     pub snapshots: Vec<StorageSnapshot>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RestorableSnapshot {
+    pub root: String,
+    pub root_name: String,
+    pub snapshot: StorageSnapshot,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotStore {
@@ -100,6 +107,46 @@ pub fn load_history(path: &Path, root: &str) -> Result<TrendHistory, String> {
         });
     history.root_id = id;
     Ok(history)
+}
+
+pub fn load_latest_snapshot(
+    path: &Path,
+    candidate_roots: &[String],
+) -> Result<Option<RestorableSnapshot>, String> {
+    let store = read_store(path)?;
+    let mut latest: Option<RestorableSnapshot> = None;
+
+    for root in candidate_roots {
+        let id = root_id(root);
+        let history = store.roots.get(&id).or_else(|| {
+            legacy_root_ids(root)
+                .into_iter()
+                .find_map(|legacy_id| store.roots.get(&legacy_id))
+        });
+        let Some(history) = history else {
+            continue;
+        };
+        let Some(snapshot) = history
+            .snapshots
+            .iter()
+            .max_by(|left, right| left.captured_at.cmp(&right.captured_at))
+        else {
+            continue;
+        };
+
+        if latest
+            .as_ref()
+            .is_none_or(|current| snapshot.captured_at > current.snapshot.captured_at)
+        {
+            latest = Some(RestorableSnapshot {
+                root: root.clone(),
+                root_name: history.root_name.clone(),
+                snapshot: snapshot.clone(),
+            });
+        }
+    }
+
+    Ok(latest)
 }
 
 pub fn clear_history(path: &Path, root: &str) -> Result<TrendHistory, String> {
@@ -420,5 +467,54 @@ mod tests {
         }
         assert_eq!(snapshots.len(), MAX_SNAPSHOTS_PER_ROOT);
         assert_eq!(snapshots.last().unwrap().total_bytes, 109);
+    }
+
+    #[test]
+    fn restores_the_newest_aggregate_snapshot_from_known_roots() {
+        let directory = std::env::temp_dir().join(format!(
+            "luna-aggregate-restore-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = directory.join("snapshots.json");
+        let home = r"C:\Users\Luna".to_string();
+        let drive = r"C:\".to_string();
+        let mut older = sample_snapshot(14, 10);
+        older.captured_at = "2026-07-14T20:20:05+02:00".to_string();
+        let mut newer = sample_snapshot(15, 20);
+        newer.captured_at = "2026-07-15T10:07:18+02:00".to_string();
+        let store = SnapshotStore {
+            schema_version: SCHEMA_VERSION,
+            roots: HashMap::from([
+                (
+                    root_id(&home),
+                    TrendHistory {
+                        root_id: root_id(&home),
+                        root_name: "Luna".to_string(),
+                        snapshots: vec![older],
+                    },
+                ),
+                (
+                    root_id(&drive),
+                    TrendHistory {
+                        root_id: root_id(&drive),
+                        root_name: "Local Disk (C:)".to_string(),
+                        snapshots: vec![newer],
+                    },
+                ),
+            ]),
+        };
+        write_store(&path, &store).unwrap();
+
+        let restored = load_latest_snapshot(&path, &[home, drive.clone()])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(restored.root, drive);
+        assert_eq!(restored.snapshot.captured_at, "2026-07-15T10:07:18+02:00");
+        let _ = fs::remove_dir_all(directory);
     }
 }

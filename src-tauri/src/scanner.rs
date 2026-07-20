@@ -71,6 +71,205 @@ struct CategoryAccumulator {
 
 type StorageAreaAccumulators = HashMap<PathBuf, HashMap<PathBuf, CategoryAccumulator>>;
 
+#[derive(Debug, Clone, Copy, Default)]
+struct DirectoryTotals {
+    size_bytes: u64,
+    file_count: u64,
+    newest_activity: Option<SystemTime>,
+}
+
+impl DirectoryTotals {
+    fn add_file(&mut self, size_bytes: u64, activity: Option<SystemTime>) {
+        self.size_bytes = self.size_bytes.saturating_add(size_bytes);
+        self.file_count = self.file_count.saturating_add(1);
+        self.newest_activity = newest_time(self.newest_activity, activity);
+    }
+
+    fn add_directory(&mut self, child: Self) {
+        self.size_bytes = self.size_bytes.saturating_add(child.size_bytes);
+        self.file_count = self.file_count.saturating_add(child.file_count);
+        self.newest_activity = newest_time(self.newest_activity, child.newest_activity);
+    }
+}
+
+#[derive(Debug)]
+struct NtfsDirectoryAccumulator {
+    parent_record_number: Option<u64>,
+    path: PathBuf,
+    direct_files: DirectoryTotals,
+}
+
+#[derive(Debug)]
+struct NtfsStorageAccumulator {
+    root_record_number: u64,
+    directories: HashMap<u64, NtfsDirectoryAccumulator>,
+}
+
+impl NtfsStorageAccumulator {
+    fn new(root: &Path, root_record_number: u64) -> Self {
+        Self {
+            root_record_number,
+            directories: HashMap::from([(
+                root_record_number,
+                NtfsDirectoryAccumulator {
+                    parent_record_number: None,
+                    path: root.to_path_buf(),
+                    direct_files: DirectoryTotals::default(),
+                },
+            )]),
+        }
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        self.directories.reserve(additional);
+    }
+
+    fn record_directory(&mut self, record_number: u64, parent_record_number: u64, path: &Path) {
+        let parent_record_number =
+            (record_number != self.root_record_number).then_some(parent_record_number);
+        let directory =
+            self.directories
+                .entry(record_number)
+                .or_insert_with(|| NtfsDirectoryAccumulator {
+                    parent_record_number,
+                    path: path.to_path_buf(),
+                    direct_files: DirectoryTotals::default(),
+                });
+        directory.parent_record_number = parent_record_number;
+        if directory.path != path {
+            directory.path = path.to_path_buf();
+        }
+    }
+
+    fn record_file(
+        &mut self,
+        parent_record_number: u64,
+        parent_path: &Path,
+        size_bytes: u64,
+        activity: Option<SystemTime>,
+    ) {
+        self.directories
+            .entry(parent_record_number)
+            .or_insert_with(|| NtfsDirectoryAccumulator {
+                parent_record_number: None,
+                path: parent_path.to_path_buf(),
+                direct_files: DirectoryTotals::default(),
+            })
+            .direct_files
+            .add_file(size_bytes, activity);
+    }
+
+    fn into_storage_index(mut self, root: &Path, now: SystemTime) -> StorageIndex {
+        if self.directories.iter().any(|(record_number, directory)| {
+            *record_number != self.root_record_number && directory.parent_record_number.is_none()
+        }) {
+            let records_by_path: HashMap<PathBuf, u64> = self
+                .directories
+                .iter()
+                .map(|(record_number, directory)| (directory.path.clone(), *record_number))
+                .collect();
+
+            for (record_number, directory) in &mut self.directories {
+                if *record_number == self.root_record_number
+                    || directory.parent_record_number.is_some()
+                {
+                    continue;
+                }
+                directory.parent_record_number = directory
+                    .path
+                    .parent()
+                    .and_then(|parent| records_by_path.get(parent))
+                    .copied();
+            }
+        }
+
+        let mut totals: HashMap<u64, DirectoryTotals> = self
+            .directories
+            .iter()
+            .map(|(record_number, directory)| (*record_number, directory.direct_files))
+            .collect();
+        let mut record_numbers: Vec<u64> = self.directories.keys().copied().collect();
+        record_numbers.sort_by_key(|record_number| {
+            Reverse(
+                self.directories
+                    .get(record_number)
+                    .map_or(0, |directory| directory.path.components().count()),
+            )
+        });
+
+        for record_number in &record_numbers {
+            let Some(parent_record_number) = self
+                .directories
+                .get(record_number)
+                .and_then(|directory| directory.parent_record_number)
+            else {
+                continue;
+            };
+            let child = totals.get(record_number).copied().unwrap_or_default();
+            totals
+                .entry(parent_record_number)
+                .or_default()
+                .add_directory(child);
+        }
+
+        let mut children: HashMap<String, Vec<StorageCategory>> =
+            HashMap::with_capacity(self.directories.len());
+        for (record_number, directory) in &self.directories {
+            let directory_key = directory.path.to_string_lossy().to_string();
+            let mut areas = Vec::new();
+            if directory.direct_files.file_count > 0 {
+                areas.push(StorageCategory {
+                    name: if *record_number == self.root_record_number {
+                        "Files at root".to_string()
+                    } else {
+                        "Files in this folder".to_string()
+                    },
+                    path: directory_key.clone(),
+                    size_bytes: directory.direct_files.size_bytes,
+                    file_count: directory.direct_files.file_count,
+                    last_used_days: days_since(directory.direct_files.newest_activity, now),
+                    can_drill_down: false,
+                });
+            }
+            children.insert(directory_key, areas);
+        }
+
+        for (record_number, directory) in &self.directories {
+            let Some(parent_record_number) = directory.parent_record_number else {
+                continue;
+            };
+            let Some(parent) = self.directories.get(&parent_record_number) else {
+                continue;
+            };
+            let total = totals.get(record_number).copied().unwrap_or_default();
+            let parent_key = parent.path.to_string_lossy();
+            if let Some(areas) = children.get_mut(parent_key.as_ref()) {
+                areas.push(StorageCategory {
+                    name: directory
+                        .path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_else(|| directory.path.to_string_lossy().to_string()),
+                    path: directory.path.to_string_lossy().to_string(),
+                    size_bytes: total.size_bytes,
+                    file_count: total.file_count,
+                    last_used_days: days_since(total.newest_activity, now),
+                    can_drill_down: true,
+                });
+            }
+        }
+
+        for areas in children.values_mut() {
+            areas.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
+        }
+
+        StorageIndex {
+            root: root.to_string_lossy().to_string(),
+            children,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ScannedFileMetadata {
     logical_size: u64,
@@ -140,6 +339,86 @@ impl ScanAccumulator {
     fn record_directory(&mut self, root: &Path, path: &Path) {
         self.folder_count = self.folder_count.saturating_add(1);
         record_storage_directory(root, path, &mut self.storage_areas);
+    }
+
+    fn record_ntfs_directory(
+        &mut self,
+        storage: &mut NtfsStorageAccumulator,
+        record_number: u64,
+        parent_record_number: u64,
+        path: &Path,
+    ) {
+        self.folder_count = self.folder_count.saturating_add(1);
+        storage.record_directory(record_number, parent_record_number, path);
+    }
+
+    fn record_ntfs_file<F>(
+        &mut self,
+        storage: &mut NtfsStorageAccumulator,
+        parent_record_number: u64,
+        parent_path: &Path,
+        metadata: ScannedFileMetadata,
+        is_one_drive: bool,
+        materialize_path: F,
+    ) where
+        F: FnOnce() -> PathBuf,
+    {
+        self.total_bytes = self.total_bytes.saturating_add(metadata.local_size);
+        self.file_count = self.file_count.saturating_add(1);
+        add_age_bytes(
+            &mut self.ages,
+            metadata.local_size,
+            metadata.activity,
+            self.now,
+        );
+        storage.record_file(
+            parent_record_number,
+            parent_path,
+            metadata.local_size,
+            metadata.activity,
+        );
+
+        if is_one_drive {
+            self.one_drive_stats
+                .observe(metadata.online_only, metadata.always_kept);
+        }
+
+        let qualifies_as_large = metadata.local_size > 0
+            && (self.largest.len() < LARGE_FILE_LIMIT
+                || self
+                    .largest
+                    .peek()
+                    .is_some_and(|Reverse((smallest, _, _))| metadata.local_size > *smallest));
+        let qualifies_as_duplicate = metadata.logical_size >= MIN_DUPLICATE_SIZE
+            && self.duplicate_candidate_count < DUPLICATE_CANDIDATE_LIMIT
+            && !is_one_drive
+            && !metadata.online_only;
+        if !qualifies_as_large && !qualifies_as_duplicate {
+            return;
+        }
+
+        let path = materialize_path();
+        if qualifies_as_large {
+            self.largest.push(Reverse((
+                metadata.local_size,
+                path.to_string_lossy().to_string(),
+                metadata.activity,
+            )));
+            if self.largest.len() > LARGE_FILE_LIMIT {
+                self.largest.pop();
+            }
+        }
+
+        if qualifies_as_duplicate {
+            self.duplicate_candidates
+                .entry(metadata.logical_size)
+                .or_default()
+                .push(CandidateFile {
+                    path,
+                    activity: metadata.activity,
+                });
+            self.duplicate_candidate_count += 1;
+        }
     }
 
     fn record_file(
@@ -649,38 +928,76 @@ where
     let mut scan = ScanAccumulator::new(&root, now);
     let mut scan_method = "windows-directory".to_string();
     let mut fast_scan_complete = false;
+    #[cfg(windows)]
+    let mut ntfs_storage =
+        NtfsStorageAccumulator::new(&root, crate::ntfs_scanner::NTFS_ROOT_RECORD);
+    #[cfg(windows)]
+    let mut ntfs_included_directories =
+        HashMap::from([(crate::ntfs_scanner::NTFS_ROOT_RECORD, true)]);
+    #[cfg(windows)]
+    let mut ntfs_one_drive_directories = HashMap::from([(
+        crate::ntfs_scanner::NTFS_ROOT_RECORD,
+        cloud_policy.is_one_drive_path(&root),
+    )]);
+    #[cfg(windows)]
+    let mut ntfs_capacity_reserved = false;
 
     #[cfg(windows)]
     match crate::ntfs_scanner::scan_volume(&root, |entry| {
-        if !should_include_ntfs_entry(
-            &root,
-            &entry.path,
-            entry.is_directory,
-            entry.file_attributes,
-        ) {
+        if !ntfs_capacity_reserved {
+            ntfs_storage.reserve(entry.directory_capacity_hint);
+            ntfs_included_directories.reserve(entry.directory_capacity_hint);
+            ntfs_one_drive_directories.reserve(entry.directory_capacity_hint);
+            ntfs_capacity_reserved = true;
+        }
+
+        let parent_is_included = *ntfs_included_directories
+            .entry(entry.parent_record_number)
+            .or_insert_with(|| should_include_ntfs_entry(&root, entry.parent_path, true, 0));
+        if !parent_is_included {
             return;
         }
 
         if entry.is_directory {
-            scan.record_directory(&root, &entry.path);
+            let Some(path) = entry.directory_path else {
+                return;
+            };
+            let is_included = should_include_ntfs_entry(&root, path, true, entry.file_attributes);
+            ntfs_included_directories.insert(entry.record_number, is_included);
+            if !is_included {
+                return;
+            }
+            ntfs_one_drive_directories
+                .insert(entry.record_number, cloud_policy.is_one_drive_path(path));
+            scan.record_ntfs_directory(
+                &mut ntfs_storage,
+                entry.record_number,
+                entry.parent_record_number,
+                path,
+            );
             return;
         }
 
-        scan.record_file(
-            &root,
-            &entry.path,
+        let is_one_drive = *ntfs_one_drive_directories
+            .entry(entry.parent_record_number)
+            .or_insert_with(|| cloud_policy.is_one_drive_path(entry.parent_path));
+        scan.record_ntfs_file(
+            &mut ntfs_storage,
+            entry.parent_record_number,
+            entry.parent_path,
             ScannedFileMetadata::from_ntfs(
                 entry.logical_size,
                 entry.activity,
                 entry.file_attributes,
             ),
-            &cloud_policy,
+            is_one_drive,
+            || entry.materialize_path(),
         );
         if scan.file_count.is_multiple_of(1_000) {
             on_progress(scan_progress(
                 scan.file_count,
                 scan.total_bytes,
-                &entry.path,
+                entry.parent_path,
                 progress_volume_space,
             ));
         }
@@ -802,6 +1119,13 @@ where
     let cleanup_ms = cleanup_started.elapsed().as_millis();
 
     let finalize_started = Instant::now();
+    #[cfg(windows)]
+    let storage_index = if fast_scan_complete {
+        ntfs_storage.into_storage_index(&root, now)
+    } else {
+        StorageIndex::from_accumulators(&root, scan.storage_areas, now)
+    };
+    #[cfg(not(windows))]
     let storage_index = StorageIndex::from_accumulators(&root, scan.storage_areas, now);
     let mut categories = storage_index.areas_for(&root.to_string_lossy())?;
     categories.truncate(24);
@@ -2100,6 +2424,47 @@ mod tests {
         let bob_areas = index.areas_for(&bob.to_string_lossy()).unwrap();
         assert_eq!(bob_areas[0].name, "Files in this folder");
         assert!(!bob_areas[0].can_drill_down);
+    }
+
+    #[test]
+    fn ntfs_storage_index_rolls_up_record_ids_even_when_files_arrive_first() {
+        let root = PathBuf::from("scan-root");
+        let users = root.join("Users");
+        let alice = users.join("Alice");
+        let empty = users.join("Empty");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 86_400);
+        let mut accumulators = NtfsStorageAccumulator::new(&root, 5);
+
+        accumulators.record_file(12, &alice, 70, Some(now));
+        accumulators.record_file(5, &root, 20, Some(now));
+        accumulators.record_directory(12, 10, &alice);
+        accumulators.record_directory(13, 10, &empty);
+        accumulators.record_directory(10, 5, &users);
+
+        let index = accumulators.into_storage_index(&root, now);
+        let root_areas = index.areas_for(&root.to_string_lossy()).unwrap();
+        let users_area = root_areas.iter().find(|area| area.name == "Users").unwrap();
+        assert_eq!(users_area.size_bytes, 70);
+        assert_eq!(users_area.file_count, 1);
+        assert!(root_areas.iter().any(|area| {
+            area.name == "Files at root" && area.size_bytes == 20 && area.file_count == 1
+        }));
+
+        let user_areas = index.areas_for(&users.to_string_lossy()).unwrap();
+        assert!(
+            user_areas.iter().any(|area| {
+                area.name == "Alice" && area.size_bytes == 70 && area.file_count == 1
+            })
+        );
+        assert!(
+            user_areas.iter().any(|area| {
+                area.name == "Empty" && area.size_bytes == 0 && area.file_count == 0
+            })
+        );
+        let alice_areas = index.areas_for(&alice.to_string_lossy()).unwrap();
+        assert_eq!(alice_areas.len(), 1);
+        assert_eq!(alice_areas[0].name, "Files in this folder");
+        assert_eq!(alice_areas[0].size_bytes, 70);
     }
 
     #[test]

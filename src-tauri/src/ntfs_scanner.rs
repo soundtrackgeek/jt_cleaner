@@ -1,24 +1,66 @@
 use ntfs_reader::{
-    api::{EPOCH_DIFFERENCE, NtfsAttributeType, NtfsFileName, NtfsFileNamespace, ROOT_RECORD},
+    api::{
+        EPOCH_DIFFERENCE, NtfsAttributeType, NtfsFileNameHeader, NtfsFileNamespace, ROOT_RECORD,
+    },
+    attribute::NtfsAttribute,
     file::NtfsFile,
     mft::Mft,
     volume::Volume,
 };
 use std::{
     collections::HashMap,
+    ffi::OsString,
+    mem::size_of,
+    os::windows::ffi::OsStringExt,
     path::{Component, Path, PathBuf, Prefix},
     time::{Duration, SystemTime},
 };
 
 const MAX_PATH_DEPTH: usize = 1_024;
+const MAX_DIRECTORY_CAPACITY_HINT: usize = 2_000_000;
+pub(crate) const NTFS_ROOT_RECORD: u64 = ROOT_RECORD;
 
-#[derive(Debug)]
-pub(crate) struct NtfsEntry {
-    pub(crate) path: PathBuf,
+#[derive(Clone, Copy)]
+struct NtfsName<'a> {
+    header: NtfsFileNameHeader,
+    utf16_bytes: &'a [u8],
+}
+
+impl NtfsName<'_> {
+    fn parent(self) -> u64 {
+        self.header.parent_directory_reference & 0x0000_FFFF_FFFF_FFFF
+    }
+
+    fn to_os_string(self) -> OsString {
+        let mut wide = Vec::with_capacity(self.utf16_bytes.len() / 2);
+        wide.extend(
+            self.utf16_bytes
+                .chunks_exact(2)
+                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]])),
+        );
+        OsString::from_wide(&wide)
+    }
+}
+
+pub(crate) struct NtfsEntry<'a> {
+    pub(crate) directory_capacity_hint: usize,
+    pub(crate) record_number: u64,
+    pub(crate) parent_record_number: u64,
+    pub(crate) parent_path: &'a Path,
+    pub(crate) directory_path: Option<&'a Path>,
     pub(crate) is_directory: bool,
     pub(crate) logical_size: u64,
     pub(crate) activity: Option<SystemTime>,
     pub(crate) file_attributes: u32,
+    file_name: NtfsName<'a>,
+}
+
+impl NtfsEntry<'_> {
+    pub(crate) fn materialize_path(&self) -> PathBuf {
+        self.directory_path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.parent_path.join(self.file_name.to_os_string()))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +78,7 @@ pub(crate) fn scan_volume<F>(
     mut on_entry: F,
 ) -> Result<Option<NtfsScanSummary>, String>
 where
-    F: FnMut(NtfsEntry),
+    F: for<'a> FnMut(NtfsEntry<'a>),
 {
     let Some(device_path) = volume_device_path(root) else {
         return Ok(None);
@@ -48,7 +90,9 @@ where
     let mft = Mft::new(volume)
         .map_err(|error| format!("Luna could not parse the NTFS master catalogue ({error})"))?;
 
-    let mut directory_paths = HashMap::from([(ROOT_RECORD, root.to_path_buf())]);
+    let directory_capacity_hint = directory_capacity_hint(mft.max_record);
+    let mut directory_paths = HashMap::with_capacity(directory_capacity_hint);
+    directory_paths.insert(ROOT_RECORD, root.to_path_buf());
     let mut unresolved_records = 0_u64;
 
     for file in mft.files() {
@@ -56,21 +100,51 @@ where
             unresolved_records = unresolved_records.saturating_add(1);
             continue;
         };
-        let Some(path) = resolve_path(&mft, &file, file_name, &mut directory_paths) else {
+        let parent_record_number = file_name.parent();
+        if !ensure_directory_path(&mft, parent_record_number, &mut directory_paths) {
             unresolved_records = unresolved_records.saturating_add(1);
             continue;
-        };
+        }
+
+        let record_number = file.number();
+        let is_directory = file.is_directory();
+        if is_directory && record_number != ROOT_RECORD {
+            let path = directory_paths
+                .get(&parent_record_number)
+                .expect("resolved NTFS parent path")
+                .join(file_name.to_os_string());
+            directory_paths.insert(record_number, path);
+        }
+
+        let parent_path = directory_paths
+            .get(&parent_record_number)
+            .expect("resolved NTFS parent path");
+        let directory_path = is_directory
+            .then(|| directory_paths.get(&record_number))
+            .flatten()
+            .map(PathBuf::as_path);
 
         on_entry(NtfsEntry {
-            path,
-            is_directory: file.is_directory(),
+            directory_capacity_hint,
+            record_number,
+            parent_record_number,
+            parent_path,
+            directory_path,
+            is_directory,
             logical_size: metadata.logical_size,
             activity: metadata.activity,
             file_attributes: metadata.file_attributes,
+            file_name,
         });
     }
 
     Ok(Some(NtfsScanSummary { unresolved_records }))
+}
+
+fn directory_capacity_hint(record_count: u64) -> usize {
+    usize::try_from(record_count / 4)
+        .unwrap_or(MAX_DIRECTORY_CAPACITY_HINT)
+        .clamp(1_024, MAX_DIRECTORY_CAPACITY_HINT)
 }
 
 fn volume_device_path(root: &Path) -> Option<PathBuf> {
@@ -103,17 +177,17 @@ struct NtfsMetadata {
     file_attributes: u32,
 }
 
-fn entry_data_for(file: &NtfsFile<'_>) -> Option<(NtfsFileName, NtfsMetadata)> {
+fn entry_data_for<'a>(file: &NtfsFile<'a>) -> Option<(NtfsName<'a>, NtfsMetadata)> {
     let mut selected_name = None;
     let mut selected_priority = 0_u8;
     let mut activity = None;
     let mut standard_attributes = None;
     let mut data_size = None;
 
-    file.attributes(|attribute| {
+    visit_attributes(file, |attribute| {
         let type_id = attribute.header.type_id;
         if type_id == NtfsAttributeType::FileName as u32 {
-            let Some(name) = attribute.as_name() else {
+            let Some(name) = name_from_attribute(attribute) else {
                 return;
             };
             let priority = file_name_priority(name.header.namespace);
@@ -155,26 +229,28 @@ fn entry_data_for(file: &NtfsFile<'_>) -> Option<(NtfsFileName, NtfsMetadata)> {
     });
 
     let file_name = selected_name?;
+    let real_size = file_name.header.real_size;
+    let file_attributes = file_name.header.file_attributes;
     Some((
         file_name,
         NtfsMetadata {
-            logical_size: data_size.unwrap_or(file_name.header.real_size),
+            logical_size: data_size.unwrap_or(real_size),
             activity,
-            file_attributes: standard_attributes.unwrap_or(file_name.header.file_attributes),
+            file_attributes: standard_attributes.unwrap_or(file_attributes),
         },
     ))
 }
 
-fn preferred_file_name(file: &NtfsFile<'_>) -> Option<NtfsFileName> {
+fn preferred_file_name<'a>(file: &NtfsFile<'a>) -> Option<NtfsName<'a>> {
     let mut selected = None;
     let mut selected_priority = 0_u8;
 
-    file.attributes(|attribute| {
+    visit_attributes(file, |attribute| {
         let type_id = attribute.header.type_id;
         if type_id != NtfsAttributeType::FileName as u32 {
             return;
         }
-        let Some(name) = attribute.as_name() else {
+        let Some(name) = name_from_attribute(attribute) else {
             return;
         };
         let priority = file_name_priority(name.header.namespace);
@@ -187,6 +263,60 @@ fn preferred_file_name(file: &NtfsFile<'_>) -> Option<NtfsFileName> {
     selected
 }
 
+fn visit_attributes<'a, F>(file: &NtfsFile<'a>, mut visit: F)
+where
+    F: FnMut(&NtfsAttribute<'a>),
+{
+    let data: &'a [u8] = file.data;
+    let mut offset = file.header.attributes_offset as usize;
+    let used = usize::min(file.header.used_size as usize, data.len());
+
+    while offset < used {
+        let Some(attribute) = NtfsAttribute::new(&data[offset..used]) else {
+            break;
+        };
+        if attribute.header.type_id == NtfsAttributeType::End as u32 {
+            break;
+        }
+        visit(&attribute);
+
+        let length = attribute.len();
+        if length == 0 {
+            break;
+        }
+        let Some(next) = offset.checked_add(length).filter(|next| *next <= used) else {
+            break;
+        };
+        offset = next;
+    }
+}
+
+fn name_from_attribute<'a>(attribute: &NtfsAttribute<'a>) -> Option<NtfsName<'a>> {
+    let value = attribute.get_resident()?;
+    name_from_resident_value(value)
+}
+
+fn name_from_resident_value(value: &[u8]) -> Option<NtfsName<'_>> {
+    let header_size = size_of::<NtfsFileNameHeader>();
+    if value.len() < header_size {
+        return None;
+    }
+
+    // SAFETY: the length check above guarantees a complete header, and
+    // `read_unaligned` does not require the resident value to be aligned.
+    let header = unsafe { value.as_ptr().cast::<NtfsFileNameHeader>().read_unaligned() };
+    let name_bytes = usize::from(header.name_length).checked_mul(2)?;
+    let end = header_size.checked_add(name_bytes)?;
+    if end > value.len() {
+        return None;
+    }
+
+    Some(NtfsName {
+        header,
+        utf16_bytes: &value[header_size..end],
+    })
+}
+
 fn file_name_priority(namespace: u8) -> u8 {
     match namespace {
         value if value == NtfsFileNamespace::Win32 as u8 => 3,
@@ -197,27 +327,13 @@ fn file_name_priority(namespace: u8) -> u8 {
     }
 }
 
-fn resolve_path(
-    mft: &Mft,
-    file: &NtfsFile<'_>,
-    file_name: NtfsFileName,
-    directory_paths: &mut HashMap<u64, PathBuf>,
-) -> Option<PathBuf> {
-    let parent = resolve_directory_path(mft, file_name.parent(), directory_paths)?;
-    let path = parent.join(file_name.to_string());
-    if file.is_directory() {
-        directory_paths.insert(file.number(), path.clone());
-    }
-    Some(path)
-}
-
-fn resolve_directory_path(
+fn ensure_directory_path(
     mft: &Mft,
     mut record_number: u64,
     directory_paths: &mut HashMap<u64, PathBuf>,
-) -> Option<PathBuf> {
-    if let Some(path) = directory_paths.get(&record_number) {
-        return Some(path.clone());
+) -> bool {
+    if directory_paths.contains_key(&record_number) {
+        return true;
     }
 
     let mut chain = Vec::new();
@@ -228,23 +344,27 @@ fn resolve_directory_path(
                 path.push(name);
                 directory_paths.insert(number, path.clone());
             }
-            return Some(path);
+            return true;
         }
 
-        let directory = mft.get_record(record_number)?;
+        let Some(directory) = mft.get_record(record_number) else {
+            return false;
+        };
         if !directory.is_used() || !directory.is_directory() {
-            return None;
+            return false;
         }
-        let name = preferred_file_name(&directory)?;
+        let Some(name) = preferred_file_name(&directory) else {
+            return false;
+        };
         let parent = name.parent();
         if parent == record_number {
-            return None;
+            return false;
         }
-        chain.push((record_number, name.to_string()));
+        chain.push((record_number, name.to_os_string()));
         record_number = parent;
     }
 
-    None
+    false
 }
 
 fn newest_ntfs_time(left: u64, right: u64) -> Option<SystemTime> {
@@ -301,5 +421,23 @@ mod tests {
             Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
         );
         assert_eq!(ntfs_time_to_system_time(0), None);
+    }
+
+    #[test]
+    fn compact_ntfs_name_borrows_and_decodes_only_the_record_bytes() {
+        let wide: Vec<u16> = "Résumé.txt".encode_utf16().collect();
+        let mut value = vec![0_u8; size_of::<NtfsFileNameHeader>() + wide.len() * 2];
+        value[..8].copy_from_slice(&42_u64.to_le_bytes());
+        value[64] = wide.len() as u8;
+        value[65] = NtfsFileNamespace::Win32 as u8;
+        for (index, character) in wide.iter().enumerate() {
+            let offset = size_of::<NtfsFileNameHeader>() + index * 2;
+            value[offset..offset + 2].copy_from_slice(&character.to_le_bytes());
+        }
+
+        let name = name_from_resident_value(&value).expect("valid NTFS file name");
+
+        assert_eq!(name.parent(), 42);
+        assert_eq!(name.to_os_string(), OsString::from("Résumé.txt"));
     }
 }

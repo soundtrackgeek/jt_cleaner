@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.0] - 2026-07-20
+
+### Changed
+
+- Aggregate NTFS inventory storage totals by parent MFT record number instead of constructing, cloning, and hashing a full path for every file.
+- Cache exclusion and OneDrive decisions once per NTFS directory, and materialize file paths only for the bounded duplicate-candidate and largest-file sets.
+- Parse NTFS file names as borrowed catalogue slices instead of initializing a fixed 255-character buffer for every name attribute.
+
 ## [0.17.0] - 2026-07-20
 
 ### Added

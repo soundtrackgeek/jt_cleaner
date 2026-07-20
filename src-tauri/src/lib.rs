@@ -4,6 +4,8 @@ mod duplicates;
 mod history;
 mod latest_scan;
 mod models;
+#[cfg(windows)]
+mod ntfs_scanner;
 mod scanner;
 mod schedule;
 mod settings;
@@ -209,6 +211,7 @@ fn scan_result_from_snapshot(restorable: history::RestorableSnapshot) -> ScanRes
         scanned_at: snapshot.captured_at,
         duration_ms: 0,
         warnings: Vec::new(),
+        scan_method: "snapshot".to_string(),
         snapshot_detail: Some("aggregate".to_string()),
         snapshot_duplicate_reclaimable_bytes: Some(snapshot.duplicate_reclaimable_bytes),
     }

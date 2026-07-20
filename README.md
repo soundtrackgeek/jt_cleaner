@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.14.3` keeps whole-drive scans metadata-only inside OneDrive. Online-only placeholders remain visible but count as 0 local bytes, locally available files count only while they occupy disk, and Luna never opens, hashes, downloads, pins, dehydrates, or cleans OneDrive files.
+Version `0.15.0` adds a fast whole-volume NTFS scan. When Luna is elevated and the selected location is a full NTFS drive, it reads and processes the drive's master file table in bulk instead of requesting metadata for every file. Folder, non-NTFS, and non-elevated scans continue through the existing Windows directory scanner automatically.
 
 ### Included
 
@@ -14,6 +14,7 @@ Version `0.14.3` keeps whole-drive scans metadata-only inside OneDrive. Online-o
 - Automatic restoration of the newest locally saved scan after the window or app restarts, preferring the detailed cache and falling back to aggregate trend history when needed.
 - A dated snapshot warning and **Run a new scan** action on restored Scan results, Storage explorer, Duplicates, and Large files views.
 - Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
+- Automatic MFT-backed inventory for elevated full-drive NTFS scans, with a safe Windows-directory fallback and the completed scan method shown in Scan results.
 - OneDrive-safe whole-drive inventory using file names, sizes, and Files On-Demand attributes only; online-only placeholders count as 0 local bytes while always-kept and temporarily cached files are reported separately.
 - Top-level storage aggregation, selectable large-file ranking, and activity-age buckets.
 - Instant Storage explorer drill-down from map tiles and folder rows, including empty folders, direct files, breadcrumbs, and back navigation without a second disk scan.
@@ -51,6 +52,7 @@ Version `0.14.3` keeps whole-drive scans metadata-only inside OneDrive. Online-o
 - Node.js 20 or newer and npm.
 - A current Rust MSVC toolchain.
 - Visual Studio Build Tools with the Desktop development with C++ workload.
+- Administrator access only when using the optional full-drive NTFS catalogue fast path; ordinary folder and fallback scans do not require elevation.
 
 ## Setup
 
@@ -69,8 +71,8 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 1. Run `npm run tauri dev`.
 2. Open **Scan results**, **Storage explorer**, **Duplicates**, or **Large files**.
 3. Choose the default home folder or a detected drive in **Settings**; Luna remembers that default across restarts. Use **Choose folder** for a one-time custom location.
-4. Start the scan and keep the app open while Luna reports progress.
-   A whole-drive scan may enumerate OneDrive paths so Storage explorer can represent all of `C:\`, but Luna never opens their contents or changes Files On-Demand state. Online-only placeholders contribute 0 local bytes; always-kept and temporarily cached files contribute their current local size.
+4. Start the scan and keep the app open while Luna reports progress. For the fastest full-drive scan, start Luna with **Run as administrator** and select an NTFS drive root such as `C:\`. Scan results identify **NTFS catalogue** when the fast path was used; if it is unavailable, Luna identifies **Windows directories** and continues without failing the scan.
+   A whole-drive scan may inventory OneDrive paths so Storage explorer can represent all of `C:\`, but Luna never opens their contents or changes Files On-Demand state. Online-only placeholders contribute 0 local bytes; always-kept and temporarily cached files contribute their current local size.
 5. After reopening Luna, those four scan views show the latest saved scan with its date and time. An older aggregate-only snapshot restores Scan Results, top-level Storage explorer totals, and duplicate opportunity; use **Run a new scan** to rebuild drill-down and file-level Duplicates or Large Files lists.
 6. In **Storage explorer**, select a folder in either the map or Largest areas list to see the folders and direct files immediately inside it. Use **Back** or an earlier breadcrumb to move up again.
 7. Review findings in **Cleanup review**. Expand an item, then select its source count to inspect the scanned locations, measured size, and file count. Safe caches are selected only when data exists; duplicate files, large files, and old Downloads are never selected automatically.
@@ -93,7 +95,9 @@ Every push to `master` runs `.github/workflows/release.yml`. The workflow checks
 
 The updater private key and its password are stored as `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` GitHub Actions secrets and are never committed. The development machine's backup is outside the repository at `%USERPROFILE%\.tauri\luna-clean.key` with its separate password file; keep a secure offline backup of both because future builds must use the same key to update existing installations.
 
-Large drive scans may encounter protected Windows folders. Luna skips unreadable entries, reports bounded warnings, does not follow symbolic links, and excludes common high-churn developer folders such as `.git` and `node_modules`. OneDrive files are inventory-only: Luna reads directory metadata to report locally occupied space, excludes every OneDrive path from duplicate hashing, and refuses file actions against OneDrive results. Duplicate analysis is capped at 20,000 non-cloud files of at least 1 MB so large scans remain bounded; storage totals are not capped.
+An elevated scan of a full NTFS drive opens the raw volume read-only, loads `$MFT`, resolves paths through parent record IDs, and processes catalogue metadata in memory. Luna never writes through the raw-volume handle. If the volume is not NTFS, the request is for a folder, elevation is unavailable, or the catalogue cannot be parsed safely, Luna falls back to Windows directory enumeration and records that choice in the result. The MFT fast path can use significant temporary memory on volumes with unusually large catalogues; that memory is released when inventory collection finishes.
+
+Large drive scans may encounter protected Windows folders. Luna skips unreadable entries, reports bounded warnings, does not follow symbolic links or directory reparse points, and excludes NTFS metadata plus common high-churn developer folders such as `.git` and `node_modules`. OneDrive files are inventory-only: Luna reads catalogue or directory metadata to report locally occupied space, excludes every OneDrive path from duplicate hashing, and refuses file actions against OneDrive results. Duplicate analysis is capped at 20,000 non-cloud files of at least 1 MB so large scans remain bounded; storage totals are not capped.
 
 ## Commands
 
@@ -112,5 +116,5 @@ Luna Clean distinguishes rebuildable caches from personal data, defaults review-
 
 ## Planned next stages
 
-- Deeper scanner performance profiling across very large NTFS volumes.
+- Benchmark MFT scan time and peak memory across very large and 4K-native NTFS volumes, then investigate incremental USN-journal refreshes.
 - Optional user-defined safe cleanup locations with conservative path validation.

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0] - 2026-07-20
+
+### Added
+
+- Scan an elevated full NTFS volume through its master file table in one bulk read, deriving file paths, sizes, timestamps, and Windows attributes from the catalogue instead of requesting metadata for every file.
+- Show whether a completed result used the **NTFS catalogue** or regular **Windows directories** scan method.
+
+### Changed
+
+- Fall back automatically to the existing directory scanner for folders, non-NTFS volumes, non-elevated runs, or an MFT that cannot be read safely.
+- Preserve OneDrive metadata-only behavior, excluded system/developer trees, duplicate limits, and scan-bound deletion revalidation on the new NTFS fast path.
+
 ## [0.14.3] - 2026-07-15
 
 ### Fixed

@@ -622,7 +622,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.14.2");
+  const [appVersion, setAppVersion] = useState("0.15.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -638,7 +638,7 @@ export function App() {
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.14.2", availableVersion: "", progress: 0, message: "" });
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.15.0", availableVersion: "", progress: 0, message: "" });
   const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
   const updateCheckInFlightRef = useRef(false);

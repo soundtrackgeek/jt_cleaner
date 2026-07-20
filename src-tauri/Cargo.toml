@@ -1,6 +1,6 @@
 [package]
 name = "luna-clean"
-version = "0.14.3"
+version = "0.15.0"
 description = "A careful, AI-assisted Windows storage cleaner"
 authors = ["Luna Clean contributors"]
 edition = "2024"
@@ -31,3 +31,6 @@ tauri-plugin-window-state = "2"
 tokio = { version = "1", features = ["time"] }
 walkdir = "2"
 zeroize = "1"
+
+[target.'cfg(windows)'.dependencies]
+ntfs-reader = "0.4.5"

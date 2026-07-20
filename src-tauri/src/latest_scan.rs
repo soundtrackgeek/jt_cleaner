@@ -101,6 +101,7 @@ mod tests {
                 scanned_at: "2026-07-14T12:00:00+02:00".to_string(),
                 duration_ms: 10,
                 warnings: Vec::new(),
+                scan_method: "windows-directory".to_string(),
                 snapshot_detail: None,
                 snapshot_duplicate_reclaimable_bytes: None,
             },

@@ -71,10 +71,6 @@ impl CloudFilePolicy {
         })
     }
 
-    pub(crate) fn blocks_content_access(&self, path: &Path, metadata: &fs::Metadata) -> bool {
-        self.is_one_drive_path(path) || is_online_only(metadata)
-    }
-
     pub(crate) fn content_access_error(
         &self,
         path: &Path,
@@ -112,7 +108,7 @@ pub(crate) fn is_online_only(_metadata: &fs::Metadata) -> bool {
 
 #[cfg(windows)]
 pub(crate) fn is_always_kept(metadata: &fs::Metadata) -> bool {
-    metadata.file_attributes() & FILE_ATTRIBUTE_PINNED != 0
+    is_always_kept_attributes(metadata.file_attributes())
 }
 
 #[cfg(not(windows))]
@@ -121,14 +117,19 @@ pub(crate) fn is_always_kept(_metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(windows)]
-fn is_online_only_attributes(attributes: u32) -> bool {
+pub(crate) fn is_online_only_attributes(attributes: u32) -> bool {
     attributes
         & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_UNPINNED | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
         != 0
 }
 
 #[cfg(windows)]
-fn local_size_bytes_for_attributes(logical_size: u64, attributes: u32) -> u64 {
+pub(crate) fn is_always_kept_attributes(attributes: u32) -> bool {
+    attributes & FILE_ATTRIBUTE_PINNED != 0
+}
+
+#[cfg(windows)]
+pub(crate) fn local_size_bytes_for_attributes(logical_size: u64, attributes: u32) -> u64 {
     if is_online_only_attributes(attributes) {
         0
     } else {

@@ -21,6 +21,9 @@ use std::{
 use sysinfo::Disks;
 use walkdir::{DirEntry, WalkDir};
 
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
 const LARGE_FILE_LIMIT: usize = 40;
 const LARGE_FILE_DELETE_LIMIT: usize = LARGE_FILE_LIMIT;
 const DUPLICATE_CANDIDATE_LIMIT: usize = 20_000;
@@ -43,11 +46,11 @@ struct OneDriveScanStats {
 }
 
 impl OneDriveScanStats {
-    fn observe(&mut self, metadata: &fs::Metadata) {
+    fn observe(&mut self, online_only: bool, always_kept: bool) {
         self.files = self.files.saturating_add(1);
-        if cloud_files::is_online_only(metadata) {
+        if online_only {
             self.online_only_files = self.online_only_files.saturating_add(1);
-        } else if cloud_files::is_always_kept(metadata) {
+        } else if always_kept {
             self.always_kept_files = self.always_kept_files.saturating_add(1);
         } else {
             self.cached_files = self.cached_files.saturating_add(1);
@@ -66,6 +69,135 @@ struct CategoryAccumulator {
 }
 
 type StorageAreaAccumulators = HashMap<PathBuf, HashMap<PathBuf, CategoryAccumulator>>;
+
+#[derive(Debug, Clone, Copy)]
+struct ScannedFileMetadata {
+    logical_size: u64,
+    local_size: u64,
+    activity: Option<SystemTime>,
+    online_only: bool,
+    always_kept: bool,
+}
+
+impl ScannedFileMetadata {
+    fn from_filesystem(metadata: &fs::Metadata) -> Self {
+        Self {
+            logical_size: metadata.len(),
+            local_size: cloud_files::local_size_bytes(metadata),
+            activity: activity_time(metadata),
+            online_only: cloud_files::is_online_only(metadata),
+            always_kept: cloud_files::is_always_kept(metadata),
+        }
+    }
+
+    #[cfg(windows)]
+    fn from_ntfs(logical_size: u64, activity: Option<SystemTime>, attributes: u32) -> Self {
+        Self {
+            logical_size,
+            local_size: cloud_files::local_size_bytes_for_attributes(logical_size, attributes),
+            activity,
+            online_only: cloud_files::is_online_only_attributes(attributes),
+            always_kept: cloud_files::is_always_kept_attributes(attributes),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScanAccumulator {
+    now: SystemTime,
+    total_bytes: u64,
+    file_count: u64,
+    folder_count: u64,
+    storage_areas: StorageAreaAccumulators,
+    ages: AgeBuckets,
+    largest: BinaryHeap<Reverse<(u64, String, Option<SystemTime>)>>,
+    duplicate_candidates: HashMap<u64, Vec<CandidateFile>>,
+    duplicate_candidate_count: usize,
+    warnings: Vec<String>,
+    one_drive_stats: OneDriveScanStats,
+}
+
+impl ScanAccumulator {
+    fn new(root: &Path, now: SystemTime) -> Self {
+        let mut storage_areas = StorageAreaAccumulators::new();
+        storage_areas.insert(root.to_path_buf(), HashMap::new());
+        Self {
+            now,
+            total_bytes: 0,
+            file_count: 0,
+            folder_count: 0,
+            storage_areas,
+            ages: AgeBuckets::default(),
+            largest: BinaryHeap::new(),
+            duplicate_candidates: HashMap::new(),
+            duplicate_candidate_count: 0,
+            warnings: Vec::new(),
+            one_drive_stats: OneDriveScanStats::default(),
+        }
+    }
+
+    fn record_directory(&mut self, root: &Path, path: &Path) {
+        self.folder_count = self.folder_count.saturating_add(1);
+        record_storage_directory(root, path, &mut self.storage_areas);
+    }
+
+    fn record_file(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        metadata: ScannedFileMetadata,
+        cloud_policy: &CloudFilePolicy,
+    ) {
+        self.total_bytes = self.total_bytes.saturating_add(metadata.local_size);
+        self.file_count = self.file_count.saturating_add(1);
+        add_age_bytes(
+            &mut self.ages,
+            metadata.local_size,
+            metadata.activity,
+            self.now,
+        );
+        record_storage_file(
+            root,
+            path,
+            metadata.local_size,
+            metadata.activity,
+            &mut self.storage_areas,
+        );
+
+        let is_one_drive = cloud_policy.is_one_drive_path(path);
+        if is_one_drive {
+            self.one_drive_stats
+                .observe(metadata.online_only, metadata.always_kept);
+        }
+
+        if metadata.local_size > 0 {
+            let display_path = path.to_string_lossy().to_string();
+            self.largest.push(Reverse((
+                metadata.local_size,
+                display_path,
+                metadata.activity,
+            )));
+            if self.largest.len() > LARGE_FILE_LIMIT {
+                self.largest.pop();
+            }
+        }
+
+        if metadata.logical_size >= MIN_DUPLICATE_SIZE
+            && self.duplicate_candidate_count < DUPLICATE_CANDIDATE_LIMIT
+            && !is_one_drive
+            && !metadata.online_only
+        {
+            self.duplicate_candidates
+                .entry(metadata.logical_size)
+                .or_default()
+                .push(CandidateFile {
+                    path: path.to_path_buf(),
+                    activity: metadata.activity,
+                });
+            self.duplicate_candidate_count += 1;
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct StorageIndex {
@@ -483,134 +615,162 @@ where
     on_progress(scan_progress(0, 0, &root, progress_volume_space));
 
     let now = SystemTime::now();
-    let mut total_bytes = 0_u64;
-    let mut file_count = 0_u64;
-    let mut folder_count = 0_u64;
-    let mut storage_areas = StorageAreaAccumulators::new();
-    storage_areas.insert(root.clone(), HashMap::new());
-    let mut ages = AgeBuckets::default();
-    let mut largest: BinaryHeap<Reverse<(u64, String, Option<SystemTime>)>> = BinaryHeap::new();
-    let mut duplicate_candidates: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
-    let mut duplicate_candidate_count = 0_usize;
-    let mut warnings = Vec::new();
-    let mut one_drive_stats = OneDriveScanStats::default();
+    let mut scan = ScanAccumulator::new(&root, now);
+    let mut scan_method = "windows-directory".to_string();
+    let mut fast_scan_complete = false;
 
-    let walker = WalkDir::new(&root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| should_descend(entry));
-
-    for result in walker {
-        let entry = match result {
-            Ok(entry) => entry,
-            Err(error) => {
-                push_warning(
-                    &mut warnings,
-                    format!("Skipped an unreadable location: {error}"),
-                );
-                continue;
-            }
-        };
-
-        if entry.depth() == 0 {
-            continue;
+    #[cfg(windows)]
+    match crate::ntfs_scanner::scan_volume(&root, |entry| {
+        if !should_include_ntfs_entry(
+            &root,
+            &entry.path,
+            entry.is_directory,
+            entry.file_attributes,
+        ) {
+            return;
         }
 
-        if entry.file_type().is_dir() {
-            folder_count = folder_count.saturating_add(1);
-            record_storage_directory(&root, entry.path(), &mut storage_areas);
-            continue;
+        if entry.is_directory {
+            scan.record_directory(&root, &entry.path);
+            return;
         }
 
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                push_warning(
-                    &mut warnings,
-                    format!("Skipped metadata for {}: {error}", entry.path().display()),
-                );
-                continue;
-            }
-        };
-
-        let logical_size = metadata.len();
-        let size = cloud_files::local_size_bytes(&metadata);
-        let activity = activity_time(&metadata);
-        total_bytes = total_bytes.saturating_add(size);
-        file_count = file_count.saturating_add(1);
-        add_age_bytes(&mut ages, size, activity, now);
-        record_storage_file(&root, entry.path(), size, activity, &mut storage_areas);
-
-        if cloud_policy.is_one_drive_path(entry.path()) {
-            one_drive_stats.observe(&metadata);
-        }
-
-        if size > 0 {
-            let display_path = entry.path().to_string_lossy().to_string();
-            largest.push(Reverse((size, display_path, activity)));
-            if largest.len() > LARGE_FILE_LIMIT {
-                largest.pop();
-            }
-        }
-
-        if logical_size >= MIN_DUPLICATE_SIZE
-            && duplicate_candidate_count < DUPLICATE_CANDIDATE_LIMIT
-            && !cloud_policy.blocks_content_access(entry.path(), &metadata)
-        {
-            duplicate_candidates
-                .entry(logical_size)
-                .or_default()
-                .push(CandidateFile {
-                    path: entry.path().to_path_buf(),
-                    activity,
-                });
-            duplicate_candidate_count += 1;
-        }
-
-        if file_count.is_multiple_of(1_000) {
+        scan.record_file(
+            &root,
+            &entry.path,
+            ScannedFileMetadata::from_ntfs(
+                entry.logical_size,
+                entry.activity,
+                entry.file_attributes,
+            ),
+            &cloud_policy,
+        );
+        if scan.file_count.is_multiple_of(1_000) {
             on_progress(scan_progress(
-                file_count,
-                total_bytes,
-                entry.path(),
+                scan.file_count,
+                scan.total_bytes,
+                &entry.path,
                 progress_volume_space,
             ));
         }
+    }) {
+        Ok(Some(summary)) => {
+            fast_scan_complete = true;
+            scan_method = "ntfs-mft".to_string();
+            if summary.unresolved_records > 0 {
+                push_warning(
+                    &mut scan.warnings,
+                    format!(
+                        "The NTFS catalogue skipped {} active records whose current paths could not be resolved.",
+                        summary.unresolved_records
+                    ),
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(error) => push_warning(
+            &mut scan.warnings,
+            format!(
+                "Fast NTFS catalogue scanning was unavailable, so Luna used Windows directory enumeration. {error}. An elevated full-volume NTFS scan is required for the fast path."
+            ),
+        ),
     }
 
-    if one_drive_stats.files > 0 {
+    if !fast_scan_complete {
+        let walker = WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(should_descend);
+
+        for result in walker {
+            let entry = match result {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push_warning(
+                        &mut scan.warnings,
+                        format!("Skipped an unreadable location: {error}"),
+                    );
+                    continue;
+                }
+            };
+
+            if entry.depth() == 0 {
+                continue;
+            }
+
+            if entry.file_type().is_dir() {
+                scan.record_directory(&root, entry.path());
+                continue;
+            }
+
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    push_warning(
+                        &mut scan.warnings,
+                        format!("Skipped metadata for {}: {error}", entry.path().display()),
+                    );
+                    continue;
+                }
+            };
+
+            scan.record_file(
+                &root,
+                entry.path(),
+                ScannedFileMetadata::from_filesystem(&metadata),
+                &cloud_policy,
+            );
+
+            if scan.file_count.is_multiple_of(1_000) {
+                on_progress(scan_progress(
+                    scan.file_count,
+                    scan.total_bytes,
+                    entry.path(),
+                    progress_volume_space,
+                ));
+            }
+        }
+    }
+
+    if scan.one_drive_stats.files > 0 {
         push_warning(
-            &mut warnings,
+            &mut scan.warnings,
             format!(
                 "Measured {} OneDrive files from metadata only: {} online-only files counted as 0 local bytes, {} always-kept files counted locally, and {} temporarily cached files counted while they occupy disk. Luna did not open, hash, download, or clean them.",
-                one_drive_stats.files,
-                one_drive_stats.online_only_files,
-                one_drive_stats.always_kept_files,
-                one_drive_stats.cached_files,
+                scan.one_drive_stats.files,
+                scan.one_drive_stats.online_only_files,
+                scan.one_drive_stats.always_kept_files,
+                scan.one_drive_stats.cached_files,
             ),
         );
     }
 
-    if duplicate_candidate_count == DUPLICATE_CANDIDATE_LIMIT {
+    if scan.duplicate_candidate_count == DUPLICATE_CANDIDATE_LIMIT {
         push_warning(
-            &mut warnings,
+            &mut scan.warnings,
             "Duplicate analysis reached its 20,000-file safety limit; the storage totals remain complete."
                 .to_string(),
         );
     }
 
-    let duplicate_groups =
-        find_duplicate_groups(duplicate_candidates, now, &cloud_policy, &mut warnings);
-    let cleanup_items = build_cleanup_items(&duplicate_groups, now, &mut warnings);
+    let duplicate_groups = find_duplicate_groups(
+        scan.duplicate_candidates,
+        now,
+        &cloud_policy,
+        &mut scan.warnings,
+    );
+    let cleanup_items = build_cleanup_items(&duplicate_groups, now, &mut scan.warnings);
 
-    let storage_index = StorageIndex::from_accumulators(&root, storage_areas, now);
+    let storage_index = StorageIndex::from_accumulators(&root, scan.storage_areas, now);
     let mut categories = storage_index.areas_for(&root.to_string_lossy())?;
     categories.truncate(24);
 
-    let mut large_files: Vec<LargeFile> = largest
+    let mut large_files: Vec<LargeFile> = scan
+        .largest
         .into_iter()
         .map(|Reverse((size_bytes, path, activity))| LargeFile {
             name: Path::new(&path)
@@ -626,8 +786,8 @@ where
     large_files.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
 
     on_progress(scan_progress(
-        file_count,
-        total_bytes,
+        scan.file_count,
+        scan.total_bytes,
         &root,
         progress_volume_space,
     ));
@@ -644,19 +804,20 @@ where
         result: ScanResult {
             root: root.to_string_lossy().to_string(),
             root_name,
-            total_bytes,
+            total_bytes: scan.total_bytes,
             drive_total_bytes: volume_space.map(|space| space.total_bytes),
             drive_used_bytes: volume_space.map(VolumeSpace::used_bytes),
-            file_count,
-            folder_count,
+            file_count: scan.file_count,
+            folder_count: scan.folder_count,
             categories,
             large_files,
             duplicate_groups,
             cleanup_items,
-            age_buckets: ages,
+            age_buckets: scan.ages,
             scanned_at: format_time(SystemTime::now()),
             duration_ms: started.elapsed().as_millis(),
-            warnings,
+            warnings: scan.warnings,
+            scan_method,
             snapshot_detail: None,
             snapshot_duplicate_reclaimable_bytes: None,
         },
@@ -737,11 +898,42 @@ fn should_descend(entry: &DirEntry) -> bool {
         return true;
     }
 
-    let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-    !matches!(
+    !is_excluded_directory_name(&entry.file_name().to_string_lossy())
+}
+
+fn is_excluded_directory_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    matches!(
         name.as_str(),
-        "$recycle.bin" | "system volume information" | "recovery" | ".git" | "node_modules"
+        "$extend"
+            | "$recycle.bin"
+            | "system volume information"
+            | "recovery"
+            | ".git"
+            | "node_modules"
     )
+}
+
+#[cfg(windows)]
+fn should_include_ntfs_entry(
+    root: &Path,
+    path: &Path,
+    is_directory: bool,
+    file_attributes: u32,
+) -> bool {
+    if is_directory && file_attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return false;
+    }
+
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let components: Vec<_> = relative.components().collect();
+    !components.iter().enumerate().any(|(index, component)| {
+        let is_directory_component = is_directory || index + 1 < components.len();
+        is_directory_component
+            && is_excluded_directory_name(&component.as_os_str().to_string_lossy())
+    })
 }
 
 fn record_storage_file(
@@ -1592,6 +1784,43 @@ mod tests {
         assert_eq!(progress.scanned_bytes, 706);
         assert_eq!(progress.drive_total_bytes, Some(475));
         assert_eq!(progress.drive_used_bytes, Some(434));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ntfs_inventory_keeps_files_but_prunes_excluded_and_reparse_directories() {
+        let root = Path::new(r"C:\");
+
+        assert!(should_include_ntfs_entry(
+            root,
+            Path::new(r"C:\Users\Alice\report.pdf"),
+            false,
+            0,
+        ));
+        assert!(should_include_ntfs_entry(
+            root,
+            Path::new(r"C:\Users\Alice\.git"),
+            false,
+            0,
+        ));
+        assert!(!should_include_ntfs_entry(
+            root,
+            Path::new(r"C:\Users\Alice\.git\objects\pack.bin"),
+            false,
+            0,
+        ));
+        assert!(!should_include_ntfs_entry(
+            root,
+            Path::new(r"C:\$Extend\$Reparse"),
+            false,
+            0,
+        ));
+        assert!(!should_include_ntfs_entry(
+            root,
+            Path::new(r"C:\MountedVolume"),
+            true,
+            FILE_ATTRIBUTE_REPARSE_POINT,
+        ));
     }
 
     #[test]

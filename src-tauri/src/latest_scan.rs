@@ -1,6 +1,10 @@
 use crate::scanner::ScanOutput;
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path};
+use std::{
+    fs::{self, File},
+    io::{BufWriter, Write},
+    path::Path,
+};
 
 const SCHEMA_VERSION: u8 = 1;
 
@@ -11,13 +15,17 @@ struct LatestScanStore {
     scan: ScanOutput,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LatestScanStoreRef<'a> {
+    schema_version: u8,
+    scan: &'a ScanOutput,
+}
+
 pub fn save(path: &Path, scan: &ScanOutput) -> Result<(), String> {
-    let store = LatestScanStore {
+    let store = LatestScanStoreRef {
         schema_version: SCHEMA_VERSION,
-        scan: ScanOutput {
-            result: scan.result.clone(),
-            storage_index: scan.storage_index.clone(),
-        },
+        scan,
     };
     write_store(path, &store)
 }
@@ -36,17 +44,22 @@ pub fn load(path: &Path) -> Result<Option<ScanOutput>, String> {
     Ok(Some(store.scan))
 }
 
-fn write_store(path: &Path, store: &LatestScanStore) -> Result<(), String> {
+fn write_store(path: &Path, store: &impl Serialize) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("Luna could not create its scan snapshot folder: {error}"))?;
     }
-    let mut payload = serde_json::to_vec(store)
-        .map_err(|error| format!("Luna could not encode the latest scan snapshot: {error}"))?;
-    payload.push(b'\n');
     let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, payload)
+    let file = File::create(&temporary)
+        .map_err(|error| format!("Luna could not create its latest scan snapshot: {error}"))?;
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer(&mut writer, store)
+        .map_err(|error| format!("Luna could not encode the latest scan snapshot: {error}"))?;
+    writer
+        .write_all(b"\n")
+        .and_then(|_| writer.flush())
         .map_err(|error| format!("Luna could not write the latest scan snapshot: {error}"))?;
+    drop(writer);
     if path.exists() {
         fs::remove_file(path)
             .map_err(|error| format!("Luna could not replace the latest scan snapshot: {error}"))?;
@@ -59,7 +72,7 @@ fn write_store(path: &Path, store: &LatestScanStore) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::{
-        models::{AgeBuckets, ScanResult, StorageCategory},
+        models::{AgeBuckets, ScanPhaseTimings, ScanResult, StorageCategory},
         scanner::StorageIndex,
     };
     use std::collections::HashMap;
@@ -100,6 +113,7 @@ mod tests {
                 age_buckets: AgeBuckets::default(),
                 scanned_at: "2026-07-14T12:00:00+02:00".to_string(),
                 duration_ms: 10,
+                phase_timings: ScanPhaseTimings::default(),
                 warnings: Vec::new(),
                 scan_method: "windows-directory".to_string(),
                 snapshot_detail: None,

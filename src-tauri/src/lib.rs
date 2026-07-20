@@ -210,6 +210,7 @@ fn scan_result_from_snapshot(restorable: history::RestorableSnapshot) -> ScanRes
         age_buckets: snapshot.age_buckets,
         scanned_at: snapshot.captured_at,
         duration_ms: 0,
+        phase_timings: models::ScanPhaseTimings::default(),
         warnings: Vec::new(),
         scan_method: "snapshot".to_string(),
         snapshot_detail: Some("aggregate".to_string()),
@@ -535,14 +536,18 @@ fn perform_scan(
     path: &str,
     emit_progress: bool,
 ) -> Result<scanner::ScanOutput, String> {
-    let output = scanner::scan_path(path, |progress: ScanProgress| {
+    let mut output = scanner::scan_path(path, |progress: ScanProgress| {
         if emit_progress {
             let _ = app.emit("scan-progress", progress);
         }
     })?;
+    let snapshot_started = std::time::Instant::now();
     history::save_snapshot(&history_file(app)?, &output.result)?;
     latest_scan::save(&latest_scan_file(app)?, &output)?;
     schedule::mark_capture(&schedule_file(app)?, path)?;
+    let snapshot_ms = snapshot_started.elapsed().as_millis();
+    output.result.phase_timings.snapshot_ms = snapshot_ms;
+    output.result.duration_ms = output.result.duration_ms.saturating_add(snapshot_ms);
     Ok(output)
 }
 

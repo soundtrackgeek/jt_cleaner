@@ -52,7 +52,7 @@ where
     let mut unresolved_records = 0_u64;
 
     for file in mft.files() {
-        let Some(file_name) = preferred_file_name(&file) else {
+        let Some((file_name, metadata)) = entry_data_for(&file) else {
             unresolved_records = unresolved_records.saturating_add(1);
             continue;
         };
@@ -61,7 +61,6 @@ where
             continue;
         };
 
-        let metadata = metadata_for(&file, file_name);
         on_entry(NtfsEntry {
             path,
             is_directory: file.is_directory(),
@@ -100,21 +99,31 @@ struct NtfsMetadata {
     file_attributes: u32,
 }
 
-fn metadata_for(file: &NtfsFile<'_>, file_name: NtfsFileName) -> NtfsMetadata {
-    let mut metadata = NtfsMetadata {
-        logical_size: file_name.header.real_size,
-        file_attributes: file_name.header.file_attributes,
-        ..NtfsMetadata::default()
-    };
+fn entry_data_for(file: &NtfsFile<'_>) -> Option<(NtfsFileName, NtfsMetadata)> {
+    let mut selected_name = None;
+    let mut selected_priority = 0_u8;
+    let mut activity = None;
+    let mut standard_attributes = None;
+    let mut data_size = None;
 
     file.attributes(|attribute| {
         let type_id = attribute.header.type_id;
+        if type_id == NtfsAttributeType::FileName as u32 {
+            let Some(name) = attribute.as_name() else {
+                return;
+            };
+            let priority = file_name_priority(name.header.namespace);
+            if priority > selected_priority {
+                selected_name = Some(name);
+                selected_priority = priority;
+            }
+            return;
+        }
+
         if type_id == NtfsAttributeType::StandardInformation as u32 {
             if let Some(info) = attribute.as_standard_info() {
-                let accessed = info.access_time;
-                let modified = info.modification_time;
-                metadata.activity = newest_ntfs_time(accessed, modified);
-                metadata.file_attributes = info.file_attributes;
+                activity = newest_ntfs_time(info.access_time, info.modification_time);
+                standard_attributes = Some(info.file_attributes);
             }
             return;
         }
@@ -131,17 +140,25 @@ fn metadata_for(file: &NtfsFile<'_>, file_name: NtfsFileName) -> NtfsMetadata {
         }
 
         if let Some(header) = attribute.resident_header() {
-            metadata.logical_size = header.value_length as u64;
+            data_size = Some(header.value_length as u64);
         } else if let Some(header) = attribute.nonresident_header() {
             // Only the first extent carries the full stream size.
             let lowest_vcn = header.lowest_vcn;
             if lowest_vcn == 0 {
-                metadata.logical_size = header.data_size;
+                data_size = Some(header.data_size);
             }
         }
     });
 
-    metadata
+    let file_name = selected_name?;
+    Some((
+        file_name,
+        NtfsMetadata {
+            logical_size: data_size.unwrap_or(file_name.header.real_size),
+            activity,
+            file_attributes: standard_attributes.unwrap_or(file_name.header.file_attributes),
+        },
+    ))
 }
 
 fn preferred_file_name(file: &NtfsFile<'_>) -> Option<NtfsFileName> {
@@ -156,14 +173,7 @@ fn preferred_file_name(file: &NtfsFile<'_>) -> Option<NtfsFileName> {
         let Some(name) = attribute.as_name() else {
             return;
         };
-        let namespace = name.header.namespace;
-        let priority = match namespace {
-            value if value == NtfsFileNamespace::Win32 as u8 => 3,
-            value if value == NtfsFileNamespace::Win32AndDos as u8 => 3,
-            value if value == NtfsFileNamespace::Posix as u8 => 2,
-            value if value == NtfsFileNamespace::Dos as u8 => 1,
-            _ => 0,
-        };
+        let priority = file_name_priority(name.header.namespace);
         if priority > selected_priority {
             selected = Some(name);
             selected_priority = priority;
@@ -171,6 +181,16 @@ fn preferred_file_name(file: &NtfsFile<'_>) -> Option<NtfsFileName> {
     });
 
     selected
+}
+
+fn file_name_priority(namespace: u8) -> u8 {
+    match namespace {
+        value if value == NtfsFileNamespace::Win32 as u8 => 3,
+        value if value == NtfsFileNamespace::Win32AndDos as u8 => 3,
+        value if value == NtfsFileNamespace::Posix as u8 => 2,
+        value if value == NtfsFileNamespace::Dos as u8 => 1,
+        _ => 0,
+    }
 }
 
 fn resolve_path(

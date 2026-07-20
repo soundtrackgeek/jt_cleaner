@@ -93,6 +93,18 @@ function scanMethodLabel(result) {
   return result?.scanMethod === "ntfs-mft" ? "NTFS catalogue" : "Windows directories";
 }
 
+function scanPhaseLabel(result) {
+  const timings = result?.phaseTimings;
+  if (!timings || !Object.values(timings).some((value) => value > 0)) return "";
+  return [
+    `Inventory ${formatDuration(timings.inventoryMs)}`,
+    `duplicates ${formatDuration(timings.duplicateMs)}`,
+    `cleanup ${formatDuration(timings.cleanupMs)}`,
+    `index ${formatDuration(timings.finalizeMs)}`,
+    timings.snapshotMs > 0 ? `save ${formatDuration(timings.snapshotMs)}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
 function AgeDistribution({ result }) {
   const entries = [
     ["0–30 days", result.ageBuckets.recentBytes, "fresh"],
@@ -193,7 +205,7 @@ export function ScanResultsView({ result, fromSnapshot, scanning, progress, erro
       {error && <div className="inline-error"><Warning24Regular />{error}</div>}
       {!result ? <EmptyScan onScan={onScan} onChooseFolder={onChooseFolder} /> : (
         <>
-          <section className="scan-summary-line"><CheckmarkCircle24Regular /><div><strong>{result.snapshotDetail === "aggregate" ? "Aggregate snapshot restored" : `Completed in ${formatDuration(result.durationMs)} via ${scanMethodLabel(result)}`}</strong><span>{formatCount(result.fileCount)} files · {formatScanSize(result)} · {result.snapshotDetail === "aggregate" ? `${result.categories.length} saved areas` : `${result.warnings.length} warnings`}</span></div><time>{formatDateTime(result.scannedAt)}</time></section>
+          <section className="scan-summary-line"><CheckmarkCircle24Regular /><div><strong>{result.snapshotDetail === "aggregate" ? "Aggregate snapshot restored" : `Completed in ${formatDuration(result.durationMs)} via ${scanMethodLabel(result)}`}</strong><span>{formatCount(result.fileCount)} files · {formatScanSize(result)} · {result.snapshotDetail === "aggregate" ? `${result.categories.length} saved areas` : `${result.warnings.length} warnings`}</span>{result.snapshotDetail !== "aggregate" && scanPhaseLabel(result) && <span>{scanPhaseLabel(result)}</span>}</div><time>{formatDateTime(result.scannedAt)}</time></section>
           <CategoryTable result={result} limit={24} />
           {result.warnings.length > 0 && <section className="feature-surface warning-list"><h2>Skipped safely</h2>{result.warnings.map((warning) => <p key={warning}><Warning24Regular />{warning}</p>)}</section>}
         </>

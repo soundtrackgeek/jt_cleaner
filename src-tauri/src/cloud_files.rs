@@ -54,20 +54,21 @@ impl CloudFilePolicy {
     }
 
     pub(crate) fn is_one_drive_path(&self, path: &Path) -> bool {
-        if path.components().any(|component| {
-            let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
-            name == "onedrive" || name.starts_with("onedrive - ")
-        }) {
+        if self
+            .one_drive_roots
+            .iter()
+            .any(|root| path_starts_with_ignore_ascii_case(path, root))
+        {
             return true;
         }
 
-        let path = normalized_path_key(path);
-        self.one_drive_roots.iter().any(|root| {
-            let root = normalized_path_key(root);
-            path == root
-                || path
-                    .strip_prefix(&root)
-                    .is_some_and(|suffix| suffix.starts_with(path_separator()))
+        path.components().any(|component| {
+            let name = component.as_os_str().to_string_lossy();
+            name.eq_ignore_ascii_case("onedrive")
+                || name
+                    .as_bytes()
+                    .get(..11)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"onedrive - "))
         })
     }
 
@@ -128,6 +129,19 @@ pub(crate) fn is_always_kept_attributes(attributes: u32) -> bool {
     attributes & FILE_ATTRIBUTE_PINNED != 0
 }
 
+fn path_starts_with_ignore_ascii_case(path: &Path, root: &Path) -> bool {
+    let mut path_components = path.components();
+    root.components().all(|expected| {
+        path_components.next().is_some_and(|actual| {
+            let actual = actual.as_os_str().to_string_lossy();
+            let expected = expected.as_os_str().to_string_lossy();
+            let actual = actual.strip_prefix(r"\\?\").unwrap_or(&actual);
+            let expected = expected.strip_prefix(r"\\?\").unwrap_or(&expected);
+            actual.eq_ignore_ascii_case(expected)
+        })
+    })
+}
+
 #[cfg(windows)]
 pub(crate) fn local_size_bytes_for_attributes(logical_size: u64, attributes: u32) -> u64 {
     if is_online_only_attributes(attributes) {
@@ -153,30 +167,25 @@ fn normalized_path_key(path: &Path) -> String {
     path.to_string_lossy().trim_end_matches('/').to_string()
 }
 
-#[cfg(windows)]
-fn path_separator() -> char {
-    '\\'
-}
-
-#[cfg(not(windows))]
-fn path_separator() -> char {
-    '/'
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn one_drive_paths_are_matched_without_touching_the_filesystem() {
-        let policy =
-            CloudFilePolicy::from_roots([PathBuf::from(r"C:\Users\Alice\OneDrive - Personal")]);
+        let policy = CloudFilePolicy::from_roots([
+            PathBuf::from(r"C:\Users\Alice\OneDrive - Personal"),
+            PathBuf::from(r"D:\Relocated\Cloud Files"),
+        ]);
 
         assert!(policy.is_one_drive_path(Path::new(
             r"\\?\c:\users\ALICE\ONEDRIVE - PERSONAL\Documents\online.raw"
         )));
         assert!(policy.is_one_drive_path(Path::new(
             r"D:\Relocated\OneDrive - Work\Documents\online.raw"
+        )));
+        assert!(policy.is_one_drive_path(Path::new(
+            r"\\?\d:\relocated\CLOUD FILES\Documents\cached.raw"
         )));
         assert!(!policy.is_one_drive_path(Path::new(r"C:\Users\Alice\Documents\local.raw")));
         assert!(!policy.is_one_drive_path(Path::new(r"C:\Users\Alice\OneDrive Backup\other.raw")));

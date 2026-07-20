@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.0] - 2026-07-20
+
+### Added
+
+- Show separate inventory, duplicate verification, cleanup analysis, storage-index, and snapshot-save timings after each detailed scan.
+
+### Changed
+
+- Build drill-down storage totals from direct-folder measurements and one bottom-up roll-up instead of updating every ancestor for every scanned file.
+- Parse each NTFS catalogue record's name, timestamps, attributes, and data size in one attribute pass, and avoid repeated lowercase/path allocations in exclusion, OneDrive, and largest-file checks.
+- Sample the start, middle, and end of same-sized duplicate candidates before reading full contents; full BLAKE3 hashes still verify every reported duplicate exactly.
+- Stream the detailed latest-scan snapshot directly to disk without cloning the complete in-memory hierarchy or constructing a second hundreds-of-megabytes JSON buffer.
+
 ## [0.15.0] - 2026-07-20
 
 ### Added

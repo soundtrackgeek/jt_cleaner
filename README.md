@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.15.0` adds a fast whole-volume NTFS scan. When Luna is elevated and the selected location is a full NTFS drive, it reads and processes the drive's master file table in bulk instead of requesting metadata for every file. Folder, non-NTFS, and non-elevated scans continue through the existing Windows directory scanner automatically.
+Version `0.16.0` makes the whole-volume NTFS path substantially leaner: Luna parses each catalogue record once, aggregates folder totals in one bottom-up pass, avoids millions of temporary path allocations, samples same-sized duplicate candidates before exact hashing, and streams the detailed snapshot to disk. Scan results now show inventory, duplicate, cleanup, index, and snapshot-save timings so remaining bottlenecks are visible. Folder, non-NTFS, and non-elevated scans continue through the existing Windows directory scanner automatically.
 
 ### Included
 
@@ -13,13 +13,13 @@ Version `0.15.0` adds a fast whole-volume NTFS scan. When Luna is elevated and t
 - A persistent default scan location that is restored whenever the interface opens.
 - Automatic restoration of the newest locally saved scan after the window or app restarts, preferring the detailed cache and falling back to aggregate trend history when needed.
 - A dated snapshot warning and **Run a new scan** action on restored Scan results, Storage explorer, Duplicates, and Large files views.
-- Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans and measured bytes for folder scans.
+- Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans, measured bytes for folder scans, and a completed phase-by-phase timing breakdown.
 - Automatic MFT-backed inventory for elevated full-drive NTFS scans, with a safe Windows-directory fallback and the completed scan method shown in Scan results.
 - OneDrive-safe whole-drive inventory using file names, sizes, and Files On-Demand attributes only; online-only placeholders count as 0 local bytes while always-kept and temporarily cached files are reported separately.
 - Top-level storage aggregation, selectable large-file ranking, and activity-age buckets.
 - Instant Storage explorer drill-down from map tiles and folder rows, including empty folders, direct files, breadcrumbs, and back navigation without a second disk scan.
 - Windows-reported used space and total capacity for whole-drive scan summaries and trend snapshots.
-- Exact duplicate detection using size grouping followed by BLAKE3 content hashes, with copy selection that always keeps at least one verified file.
+- Exact duplicate detection using size grouping, small start/middle/end samples, and then full BLAKE3 hashes only for sample matches, with copy selection that always keeps at least one verified file.
 - Confirmed permanent deletion from Duplicates and Large files with scan-bound path, type, size, and duplicate-hash revalidation before removal.
 - Browser, Codex, and Windows temporary-cache discovery.
 - Safe versus review-required cleanup grouping, expandable per-source locations and measurements, and confirmation.

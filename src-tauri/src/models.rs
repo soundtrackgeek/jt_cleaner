@@ -121,6 +121,16 @@ pub struct CleanupItem {
     pub evidence_sources: Vec<CleanupEvidenceSource>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanPhaseTimings {
+    pub inventory_ms: u128,
+    pub duplicate_ms: u128,
+    pub cleanup_ms: u128,
+    pub finalize_ms: u128,
+    pub snapshot_ms: u128,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
@@ -138,6 +148,8 @@ pub struct ScanResult {
     pub age_buckets: AgeBuckets,
     pub scanned_at: String,
     pub duration_ms: u128,
+    #[serde(default)]
+    pub phase_timings: ScanPhaseTimings,
     pub warnings: Vec<String>,
     #[serde(default = "default_scan_method")]
     pub scan_method: String,

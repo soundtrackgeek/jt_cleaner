@@ -2,8 +2,8 @@ use crate::{
     cloud_files::{self, CloudFilePolicy},
     models::{
         AgeBuckets, CleanupEvidenceSource, CleanupItem, CleanupResult, DeletedLargeFile,
-        DuplicateFile, DuplicateGroup, LargeFile, LargeFileDeleteResult, ScanProgress, ScanResult,
-        ScanRootInfo, StorageCategory,
+        DuplicateFile, DuplicateGroup, LargeFile, LargeFileDeleteResult, ScanPhaseTimings,
+        ScanProgress, ScanResult, ScanRootInfo, StorageCategory,
     },
 };
 use blake3::Hasher;
@@ -14,7 +14,7 @@ use std::{
     collections::{BinaryHeap, HashMap, HashSet},
     env,
     fs::{self, File},
-    io::{BufReader, Read},
+    io::{BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::{Instant, SystemTime},
 };
@@ -30,6 +30,7 @@ const DUPLICATE_CANDIDATE_LIMIT: usize = 20_000;
 const DUPLICATE_SIZE_GROUP_LIMIT: usize = 60;
 const DUPLICATE_FILES_PER_GROUP_LIMIT: usize = 12;
 const MIN_DUPLICATE_SIZE: u64 = 1_048_576;
+const DUPLICATE_SAMPLE_SIZE: usize = 65_536;
 
 #[derive(Debug, Clone)]
 struct CandidateFile {
@@ -170,7 +171,13 @@ impl ScanAccumulator {
                 .observe(metadata.online_only, metadata.always_kept);
         }
 
-        if metadata.local_size > 0 {
+        let qualifies_as_large = metadata.local_size > 0
+            && (self.largest.len() < LARGE_FILE_LIMIT
+                || self
+                    .largest
+                    .peek()
+                    .is_some_and(|Reverse((smallest, _, _))| metadata.local_size > *smallest));
+        if qualifies_as_large {
             let display_path = path.to_string_lossy().to_string();
             self.largest.push(Reverse((
                 metadata.local_size,
@@ -215,9 +222,10 @@ impl StorageIndex {
 
     fn from_accumulators(
         root: &Path,
-        accumulators: StorageAreaAccumulators,
+        mut accumulators: StorageAreaAccumulators,
         now: SystemTime,
     ) -> Self {
+        roll_up_storage_areas(root, &mut accumulators);
         let children = accumulators
             .into_iter()
             .map(|(parent, areas)| {
@@ -757,14 +765,20 @@ where
         );
     }
 
+    let inventory_ms = started.elapsed().as_millis();
+    let duplicate_started = Instant::now();
     let duplicate_groups = find_duplicate_groups(
         scan.duplicate_candidates,
         now,
         &cloud_policy,
         &mut scan.warnings,
     );
+    let duplicate_ms = duplicate_started.elapsed().as_millis();
+    let cleanup_started = Instant::now();
     let cleanup_items = build_cleanup_items(&duplicate_groups, now, &mut scan.warnings);
+    let cleanup_ms = cleanup_started.elapsed().as_millis();
 
+    let finalize_started = Instant::now();
     let storage_index = StorageIndex::from_accumulators(&root, scan.storage_areas, now);
     let mut categories = storage_index.areas_for(&root.to_string_lossy())?;
     categories.truncate(24);
@@ -799,6 +813,8 @@ where
         .unwrap_or_else(|| root.to_string_lossy().to_string());
 
     let volume_space = volume_space_for_root(&root);
+    let finalize_ms = finalize_started.elapsed().as_millis();
+    let duration_ms = started.elapsed().as_millis();
 
     Ok(ScanOutput {
         result: ScanResult {
@@ -815,7 +831,14 @@ where
             cleanup_items,
             age_buckets: scan.ages,
             scanned_at: format_time(SystemTime::now()),
-            duration_ms: started.elapsed().as_millis(),
+            duration_ms,
+            phase_timings: ScanPhaseTimings {
+                inventory_ms,
+                duplicate_ms,
+                cleanup_ms,
+                finalize_ms,
+                snapshot_ms: 0,
+            },
             warnings: scan.warnings,
             scan_method,
             snapshot_detail: None,
@@ -902,16 +925,16 @@ fn should_descend(entry: &DirEntry) -> bool {
 }
 
 fn is_excluded_directory_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    matches!(
-        name.as_str(),
-        "$extend"
-            | "$recycle.bin"
-            | "system volume information"
-            | "recovery"
-            | ".git"
-            | "node_modules"
-    )
+    [
+        "$extend",
+        "$recycle.bin",
+        "system volume information",
+        "recovery",
+        ".git",
+        "node_modules",
+    ]
+    .iter()
+    .any(|excluded| name.eq_ignore_ascii_case(excluded))
 }
 
 #[cfg(windows)]
@@ -928,12 +951,16 @@ fn should_include_ntfs_entry(
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
-    let components: Vec<_> = relative.components().collect();
-    !components.iter().enumerate().any(|(index, component)| {
-        let is_directory_component = is_directory || index + 1 < components.len();
-        is_directory_component
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let is_directory_component = is_directory || components.peek().is_some();
+        if is_directory_component
             && is_excluded_directory_name(&component.as_os_str().to_string_lossy())
-    })
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn record_storage_file(
@@ -943,46 +970,29 @@ fn record_storage_file(
     activity: Option<SystemTime>,
     storage_areas: &mut StorageAreaAccumulators,
 ) {
-    let mut child = file;
-    while let Some(parent) = child.parent() {
-        if !parent.starts_with(root) {
-            break;
-        }
+    let Some(parent) = file.parent().filter(|parent| parent.starts_with(root)) else {
+        return;
+    };
+    ensure_storage_directory(root, parent, storage_areas);
 
-        let is_direct_file = child == file;
-        let area_path = if is_direct_file { parent } else { child };
-        let name = if is_direct_file {
-            if parent == root {
-                "Files at root".to_string()
-            } else {
-                "Files in this folder".to_string()
-            }
-        } else {
-            child
-                .file_name()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_else(|| child.to_string_lossy().to_string())
-        };
-
-        let area = storage_areas
-            .entry(parent.to_path_buf())
-            .or_default()
-            .entry(area_path.to_path_buf())
-            .or_insert_with(|| CategoryAccumulator {
-                name,
-                path: area_path.to_path_buf(),
-                can_drill_down: !is_direct_file,
-                ..CategoryAccumulator::default()
-            });
-        area.size_bytes = area.size_bytes.saturating_add(size);
-        area.file_count = area.file_count.saturating_add(1);
-        area.newest_activity = newest_time(area.newest_activity, activity);
-
-        if parent == root {
-            break;
-        }
-        child = parent;
-    }
+    let name = if parent == root {
+        "Files at root".to_string()
+    } else {
+        "Files in this folder".to_string()
+    };
+    let area = storage_areas
+        .entry(parent.to_path_buf())
+        .or_default()
+        .entry(parent.to_path_buf())
+        .or_insert_with(|| CategoryAccumulator {
+            name,
+            path: parent.to_path_buf(),
+            can_drill_down: false,
+            ..CategoryAccumulator::default()
+        });
+    area.size_bytes = area.size_bytes.saturating_add(size);
+    area.file_count = area.file_count.saturating_add(1);
+    area.newest_activity = newest_time(area.newest_activity, activity);
 }
 
 fn record_storage_directory(
@@ -990,6 +1000,25 @@ fn record_storage_directory(
     directory: &Path,
     storage_areas: &mut StorageAreaAccumulators,
 ) {
+    ensure_storage_directory(root, directory, storage_areas);
+}
+
+fn ensure_storage_directory(
+    root: &Path,
+    directory: &Path,
+    storage_areas: &mut StorageAreaAccumulators,
+) {
+    if storage_areas.contains_key(directory) || !directory.starts_with(root) {
+        return;
+    }
+
+    if directory != root {
+        let Some(parent) = directory.parent().filter(|parent| parent.starts_with(root)) else {
+            return;
+        };
+        ensure_storage_directory(root, parent, storage_areas);
+    }
+
     storage_areas.entry(directory.to_path_buf()).or_default();
     let Some(parent) = directory.parent().filter(|parent| parent.starts_with(root)) else {
         return;
@@ -1008,6 +1037,42 @@ fn record_storage_directory(
             can_drill_down: true,
             ..CategoryAccumulator::default()
         });
+}
+
+fn roll_up_storage_areas(root: &Path, storage_areas: &mut StorageAreaAccumulators) {
+    let mut directories: Vec<PathBuf> = storage_areas.keys().cloned().collect();
+    directories.sort_by_key(|path| Reverse(path.components().count()));
+
+    for directory in directories {
+        if directory == root {
+            continue;
+        }
+        let Some(parent) = directory.parent().filter(|parent| parent.starts_with(root)) else {
+            continue;
+        };
+        let Some(areas) = storage_areas.get(&directory) else {
+            continue;
+        };
+        let (size_bytes, file_count, newest_activity) = areas.values().fold(
+            (0_u64, 0_u64, None),
+            |(size_bytes, file_count, newest_activity), area| {
+                (
+                    size_bytes.saturating_add(area.size_bytes),
+                    file_count.saturating_add(area.file_count),
+                    newest_time(newest_activity, area.newest_activity),
+                )
+            },
+        );
+
+        if let Some(parent_area) = storage_areas
+            .get_mut(parent)
+            .and_then(|areas| areas.get_mut(&directory))
+        {
+            parent_area.size_bytes = size_bytes;
+            parent_area.file_count = file_count;
+            parent_area.newest_activity = newest_activity;
+        }
+    }
 }
 
 fn activity_time(metadata: &fs::Metadata) -> Option<SystemTime> {
@@ -1074,14 +1139,27 @@ fn find_duplicate_groups(
 
     let mut duplicate_groups = Vec::new();
     for (size, files) in size_groups {
-        let mut hashes: HashMap<String, Vec<CandidateFile>> = HashMap::new();
+        let mut sample_hashes: HashMap<String, Vec<CandidateFile>> = HashMap::new();
         for candidate in files.into_iter().take(DUPLICATE_FILES_PER_GROUP_LIMIT) {
-            match hash_file_with_policy(&candidate.path, cloud_policy) {
-                Ok(hash) => hashes.entry(hash).or_default().push(candidate),
+            match sample_file_with_policy(&candidate.path, size, cloud_policy) {
+                Ok(hash) => sample_hashes.entry(hash).or_default().push(candidate),
                 Err(error) => push_warning(
                     warnings,
                     format!("Could not compare {}: {error}", candidate.path.display()),
                 ),
+            }
+        }
+
+        let mut hashes: HashMap<String, Vec<CandidateFile>> = HashMap::new();
+        for files in sample_hashes.into_values().filter(|files| files.len() > 1) {
+            for candidate in files {
+                match hash_file_with_policy_at_size(&candidate.path, size, cloud_policy) {
+                    Ok(hash) => hashes.entry(hash).or_default().push(candidate),
+                    Err(error) => push_warning(
+                        warnings,
+                        format!("Could not compare {}: {error}", candidate.path.display()),
+                    ),
+                }
             }
         }
 
@@ -1137,6 +1215,67 @@ fn hash_file_with_policy(path: &Path, cloud_policy: &CloudFilePolicy) -> Result<
             break;
         }
         hasher.update(&buffer[..read]);
+    }
+
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn hash_file_with_policy_at_size(
+    path: &Path,
+    expected_size: u64,
+    cloud_policy: &CloudFilePolicy,
+) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.len() != expected_size {
+        return Err("The file changed size after it was indexed.".to_string());
+    }
+    hash_file_with_policy(path, cloud_policy)
+}
+
+fn sample_file_with_policy(
+    path: &Path,
+    expected_size: u64,
+    cloud_policy: &CloudFilePolicy,
+) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.len() != expected_size {
+        return Err("The file changed size after it was indexed.".to_string());
+    }
+    if let Some(error) = cloud_policy.content_access_error(path, &metadata) {
+        return Err(error.to_string());
+    }
+
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let sample_size = expected_size.min(DUPLICATE_SAMPLE_SIZE as u64);
+    let offsets = [
+        0,
+        expected_size.saturating_sub(sample_size) / 2,
+        expected_size.saturating_sub(sample_size),
+    ];
+    let mut previous_offset = None;
+    let mut buffer = [0_u8; DUPLICATE_SAMPLE_SIZE];
+    let mut hasher = Hasher::new();
+    hasher.update(&expected_size.to_le_bytes());
+
+    for offset in offsets {
+        if previous_offset == Some(offset) {
+            continue;
+        }
+        previous_offset = Some(offset);
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| error.to_string())?;
+        let mut read_total = 0;
+        while read_total < sample_size as usize {
+            let read = file
+                .read(&mut buffer[read_total..sample_size as usize])
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                return Err("The file changed while Luna sampled it.".to_string());
+            }
+            read_total += read;
+        }
+        hasher.update(&offset.to_le_bytes());
+        hasher.update(&buffer[..read_total]);
     }
 
     Ok(hasher.finalize().to_hex().to_string())
@@ -1681,6 +1820,54 @@ mod tests {
 
         assert!(result.is_err_and(|error| error.contains("metadata-only")));
         fs::remove_dir_all(root).expect("temporary OneDrive root should be removed");
+    }
+
+    #[test]
+    fn duplicate_sampling_rejects_same_sized_non_matches_before_full_hashing() {
+        let root = temporary_large_file_root("duplicate-sampling");
+        fs::create_dir_all(&root).expect("temporary duplicate root should be created");
+        let first = root.join("first.bin");
+        let second = root.join("second.bin");
+        let different = root.join("different.bin");
+        let contents = vec![b'a'; MIN_DUPLICATE_SIZE as usize];
+        let mut different_contents = contents.clone();
+        different_contents[contents.len() / 2] = b'b';
+        fs::write(&first, &contents).expect("first duplicate should be written");
+        fs::write(&second, &contents).expect("second duplicate should be written");
+        fs::write(&different, &different_contents).expect("non-match should be written");
+        let policy = CloudFilePolicy::default();
+
+        let first_sample = sample_file_with_policy(&first, MIN_DUPLICATE_SIZE, &policy).unwrap();
+        let second_sample = sample_file_with_policy(&second, MIN_DUPLICATE_SIZE, &policy).unwrap();
+        let different_sample =
+            sample_file_with_policy(&different, MIN_DUPLICATE_SIZE, &policy).unwrap();
+        assert_eq!(first_sample, second_sample);
+        assert_ne!(first_sample, different_sample);
+
+        let candidates = HashMap::from([(
+            MIN_DUPLICATE_SIZE,
+            vec![
+                CandidateFile {
+                    path: first,
+                    activity: None,
+                },
+                CandidateFile {
+                    path: second,
+                    activity: None,
+                },
+                CandidateFile {
+                    path: different,
+                    activity: None,
+                },
+            ],
+        )]);
+        let mut warnings = Vec::new();
+        let groups = find_duplicate_groups(candidates, SystemTime::now(), &policy, &mut warnings);
+        assert!(warnings.is_empty());
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].files.len(), 2);
+
+        fs::remove_dir_all(root).expect("temporary duplicate root should be removed");
     }
 
     #[test]

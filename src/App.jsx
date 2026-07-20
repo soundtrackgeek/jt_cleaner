@@ -622,7 +622,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [appVersion, setAppVersion] = useState("0.15.0");
+  const [appVersion, setAppVersion] = useState("0.17.0");
   const [scanRoots, setScanRoots] = useState([]);
   const [selectedRoot, setSelectedRoot] = useState("");
   const [scanResult, setScanResult] = useState(null);
@@ -638,11 +638,13 @@ export function App() {
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
-  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.15.0", availableVersion: "", progress: 0, message: "" });
+  const [updateState, setUpdateState] = useState({ phase: "idle", currentVersion: "0.17.0", availableVersion: "", progress: 0, message: "" });
   const [updateToastVersion, setUpdateToastVersion] = useState("");
   const updateRef = useRef(null);
   const updateCheckInFlightRef = useRef(false);
   const announcedUpdateVersionRef = useRef("");
+  const initializationStartedRef = useRef(false);
+  const startupScanStartedRef = useRef(false);
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items]);
   const selectedSize = useMemo(
@@ -659,13 +661,23 @@ export function App() {
   );
 
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || initializationStartedRef.current) return;
+    initializationStartedRef.current = true;
     setTrendHistory(null);
-    Promise.all([invoke("app_status"), invoke("list_scan_roots"), invoke("get_schedule_status"), isAutostartEnabled(), invoke("ai_status"), invoke("get_latest_scan").catch(() => null)])
-      .then(([status, roots, schedule, autostart, ai, latestScan]) => {
+    invoke("take_startup_scan_root")
+      .then((startupScanRoot) => Promise.all([
+        invoke("app_status"),
+        invoke("list_scan_roots"),
+        invoke("get_schedule_status"),
+        isAutostartEnabled(),
+        invoke("ai_status"),
+        startupScanRoot ? Promise.resolve(null) : invoke("get_latest_scan").catch(() => null),
+        Promise.resolve(startupScanRoot),
+      ]))
+      .then(([status, roots, schedule, autostart, ai, latestScan, startupScanRoot]) => {
         setAppVersion(status.version);
         setScanRoots(roots);
-        setSelectedRoot(latestScan?.root || status.defaultScanRoot || roots[0]?.path || "");
+        setSelectedRoot(startupScanRoot || latestScan?.root || status.defaultScanRoot || roots[0]?.path || "");
         if (latestScan) {
           setScanResult(latestScan);
           setResultFromSnapshot(true);
@@ -677,6 +689,11 @@ export function App() {
         setAiStatus(ai);
         setUpdateCheckIntervalMinutes(status.updateCheckIntervalMinutes || 5);
         setUpdateState((current) => ({ ...current, currentVersion: status.version }));
+        if (startupScanRoot && !startupScanStartedRef.current) {
+          startupScanStartedRef.current = true;
+          setActiveNav("scan");
+          runScan(startupScanRoot);
+        }
       })
       .catch(() => undefined);
   }, [isTauri]);
@@ -768,10 +785,15 @@ export function App() {
       setScanError("Choose a folder or drive first.");
       return;
     }
-    setScanning(true);
     setScanError("");
-    setScanProgress({ scannedFiles: 0, scannedBytes: 0, currentPath: path });
     try {
+      const preparation = await invoke("prepare_scan", { path });
+      if (preparation.relaunching) {
+        setToast("Windows approved administrator access. Restarting Luna and resuming the scan…");
+        return;
+      }
+      setScanning(true);
+      setScanProgress({ scannedFiles: 0, scannedBytes: 0, currentPath: path });
       const result = await invoke("scan_path", { path });
       setScanResult(result);
       setResultFromSnapshot(false);

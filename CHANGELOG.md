@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.17.0] - 2026-07-20
+
+### Added
+
+- Request Windows UAC approval automatically when an unelevated full-drive NTFS scan needs raw catalogue access, relaunch Luna's own executable, preserve the selected drive, and resume the scan without another click.
+
+### Changed
+
+- Keep ordinary folder scans unelevated and leave the current Luna window open with a clear error when administrator approval is cancelled or the elevated process cannot start.
+
 ## [0.16.0] - 2026-07-20
 
 ### Added

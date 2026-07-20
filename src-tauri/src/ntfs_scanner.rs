@@ -92,6 +92,10 @@ fn volume_device_path(root: &Path) -> Option<PathBuf> {
     )))
 }
 
+pub(crate) fn is_volume_root(path: &Path) -> bool {
+    volume_device_path(path).is_some()
+}
+
 #[derive(Debug, Default)]
 struct NtfsMetadata {
     logical_size: u64,

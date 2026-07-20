@@ -1,6 +1,7 @@
 mod ai;
 mod cloud_files;
 mod duplicates;
+mod elevation;
 mod history;
 mod latest_scan;
 mod models;
@@ -17,7 +18,7 @@ use models::{
 };
 use serde::Serialize;
 use std::sync::{
-    Arc, RwLock,
+    Arc, Mutex, RwLock,
     atomic::{AtomicBool, Ordering},
 };
 use tauri::{
@@ -37,6 +38,8 @@ struct RuntimeState {
 }
 
 struct ScanPermit(Arc<AtomicBool>);
+
+struct StartupScanState(Mutex<Option<String>>);
 
 impl Drop for ScanPermit {
     fn drop(&mut self) {
@@ -70,6 +73,12 @@ struct ScheduledScanEvent {
     scanned_at: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanPreparation {
+    relaunching: bool,
+}
+
 #[tauri::command]
 fn app_status(app: AppHandle) -> AppStatus {
     let app_settings = settings_file(&app)
@@ -91,6 +100,34 @@ fn app_status(app: AppHandle) -> AppStatus {
 #[tauri::command]
 fn list_scan_roots() -> Vec<ScanRootInfo> {
     scanner::list_scan_roots()
+}
+
+#[tauri::command]
+fn take_startup_scan_root(state: State<'_, StartupScanState>) -> Result<Option<String>, String> {
+    state
+        .0
+        .lock()
+        .map_err(|_| "Luna could not read its pending elevated scan.".to_string())
+        .map(|mut root| root.take())
+}
+
+#[tauri::command]
+fn prepare_scan(
+    app: AppHandle,
+    state: State<'_, RuntimeState>,
+    path: String,
+) -> Result<ScanPreparation, String> {
+    if !scanner::is_full_ntfs_volume_path(&path) || elevation::is_process_elevated()? {
+        return Ok(ScanPreparation { relaunching: false });
+    }
+
+    elevation::relaunch_for_scan(&path)?;
+    state.quitting.store(true, Ordering::Release);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        app.exit(0);
+    });
+    Ok(ScanPreparation { relaunching: true })
 }
 
 #[tauri::command]
@@ -685,8 +722,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn start_schedule_monitor(app: AppHandle, flag: Arc<AtomicBool>) {
+fn start_schedule_monitor(app: AppHandle, flag: Arc<AtomicBool>, defer_first_check: bool) {
     tauri::async_runtime::spawn(async move {
+        if defer_first_check {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
         loop {
             background_scan(app.clone(), flag.clone(), false).await;
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -699,6 +739,7 @@ pub fn run() {
     let _ = dotenvy::dotenv();
     let app = tauri::Builder::default()
         .manage(RuntimeState::default())
+        .manage(StartupScanState(Mutex::new(elevation::startup_scan_root())))
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .args(["--hidden"])
@@ -715,7 +756,12 @@ pub fn run() {
         .setup(|app| {
             setup_tray(app)?;
             let flag = app.state::<RuntimeState>().scan_running.clone();
-            start_schedule_monitor(app.handle().clone(), flag);
+            let elevated_scan_pending = app
+                .state::<StartupScanState>()
+                .0
+                .lock()
+                .is_ok_and(|root| root.is_some());
+            start_schedule_monitor(app.handle().clone(), flag, elevated_scan_pending);
             if !std::env::args().any(|argument| argument == "--hidden") {
                 show_main_window(app.handle()).map_err(std::io::Error::other)?;
             }
@@ -733,6 +779,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_status,
             list_scan_roots,
+            take_startup_scan_root,
+            prepare_scan,
             get_latest_scan,
             scan_path,
             list_storage_areas,

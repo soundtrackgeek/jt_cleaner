@@ -534,6 +534,29 @@ pub fn list_scan_roots() -> Vec<ScanRootInfo> {
     roots
 }
 
+#[cfg(windows)]
+pub(crate) fn is_full_ntfs_volume_path(requested_path: &str) -> bool {
+    let Ok(root) = fs::canonicalize(requested_path) else {
+        return false;
+    };
+    if !crate::ntfs_scanner::is_volume_root(&root) {
+        return false;
+    }
+
+    Disks::new_with_refreshed_list().iter().any(|disk| {
+        paths_refer_to_same_location(&root, disk.mount_point())
+            && disk
+                .file_system()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("ntfs")
+    })
+}
+
+#[cfg(not(windows))]
+pub(crate) fn is_full_ntfs_volume_path(_requested_path: &str) -> bool {
+    false
+}
+
 fn volume_space_for_root(root: &Path) -> Option<VolumeSpace> {
     let disks = Disks::new_with_refreshed_list();
     volume_space_from_mounts(
@@ -2179,5 +2202,24 @@ mod tests {
         let space = volume_space_for_root(&canonical_root).expect("matching Windows volume");
 
         assert_eq!(space.total_bytes, drive.total_bytes);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_a_full_ntfs_volume_requests_scan_elevation() {
+        assert!(!is_full_ntfs_volume_path(
+            &env::temp_dir().to_string_lossy()
+        ));
+
+        let disks = Disks::new_with_refreshed_list();
+        if let Some(disk) = disks.iter().find(|disk| {
+            disk.file_system()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("ntfs")
+        }) {
+            assert!(is_full_ntfs_volume_path(
+                &disk.mount_point().to_string_lossy()
+            ));
+        }
     }
 }

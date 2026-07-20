@@ -928,6 +928,9 @@ where
     let mut scan = ScanAccumulator::new(&root, now);
     let mut scan_method = "windows-directory".to_string();
     let mut fast_scan_complete = false;
+    let mut ntfs_catalogue_read_ms = 0;
+    let mut ntfs_record_fixup_ms = 0;
+    let mut ntfs_record_parse_ms = 0;
     #[cfg(windows)]
     let mut ntfs_storage =
         NtfsStorageAccumulator::new(&root, crate::ntfs_scanner::NTFS_ROOT_RECORD);
@@ -1005,6 +1008,16 @@ where
         Ok(Some(summary)) => {
             fast_scan_complete = true;
             scan_method = "ntfs-mft".to_string();
+            ntfs_catalogue_read_ms = summary.catalogue_read_ms;
+            ntfs_record_fixup_ms = summary.record_fixup_ms;
+            ntfs_record_parse_ms = summary.record_parse_ms;
+            if summary.used_compatibility_reader {
+                push_warning(
+                    &mut scan.warnings,
+                    "Wide sequential NTFS reads were unavailable, so Luna used the compatible 4 KiB catalogue reader; inventory will be slower on this volume."
+                        .to_string(),
+                );
+            }
             if summary.unresolved_records > 0 {
                 push_warning(
                     &mut scan.warnings,
@@ -1181,6 +1194,9 @@ where
             duration_ms,
             phase_timings: ScanPhaseTimings {
                 inventory_ms,
+                ntfs_catalogue_read_ms,
+                ntfs_record_fixup_ms,
+                ntfs_record_parse_ms,
                 duplicate_ms,
                 cleanup_ms,
                 finalize_ms,

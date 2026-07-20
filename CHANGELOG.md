@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0] - 2026-07-20
+
+### Added
+
+- Show separate MFT read, active-record fixup, and record-processing timings within the NTFS inventory phase.
+- Retain an automatic compatibility reader for raw volumes that do not accept wide aligned reads.
+
+### Changed
+
+- Read the raw NTFS catalogue in aligned 16 MiB blocks instead of issuing the multi-gigabyte stream as 4 KiB device reads.
+- Apply NTFS update-sequence fixups only to bitmap-active MFT records and distribute that independent work across up to eight CPU workers.
+
 ## [0.18.0] - 2026-07-20
 
 ### Changed

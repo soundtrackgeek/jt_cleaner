@@ -1,6 +1,6 @@
 [package]
 name = "luna-clean"
-version = "0.18.0"
+version = "0.19.0"
 description = "A careful, AI-assisted Windows storage cleaner"
 authors = ["Luna Clean contributors"]
 edition = "2024"
@@ -37,6 +37,7 @@ ntfs-reader = "0.4.5"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

@@ -125,6 +125,12 @@ pub struct CleanupItem {
 #[serde(rename_all = "camelCase")]
 pub struct ScanPhaseTimings {
     pub inventory_ms: u128,
+    #[serde(default)]
+    pub ntfs_catalogue_read_ms: u128,
+    #[serde(default)]
+    pub ntfs_record_fixup_ms: u128,
+    #[serde(default)]
+    pub ntfs_record_parse_ms: u128,
     pub duplicate_ms: u128,
     pub cleanup_ms: u128,
     pub finalize_ms: u128,
@@ -161,6 +167,30 @@ pub struct ScanResult {
 
 fn default_scan_method() -> String {
     "windows-directory".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_phase_timings_default_new_ntfs_breakdown_fields() {
+        let timings: ScanPhaseTimings = serde_json::from_str(
+            r#"{
+                "inventoryMs": 32000,
+                "duplicateMs": 18000,
+                "cleanupMs": 2000,
+                "finalizeMs": 3000,
+                "snapshotMs": 1000
+            }"#,
+        )
+        .expect("older timing snapshot should remain readable");
+
+        assert_eq!(timings.inventory_ms, 32_000);
+        assert_eq!(timings.ntfs_catalogue_read_ms, 0);
+        assert_eq!(timings.ntfs_record_fixup_ms, 0);
+        assert_eq!(timings.ntfs_record_parse_ms, 0);
+    }
 }
 
 impl ScanResult {

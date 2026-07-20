@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.18.0` makes the NTFS inventory loop substantially leaner. Luna now aggregates storage by MFT directory record number, caches exclusion and OneDrive decisions once per directory, borrows file-name bytes directly from the catalogue, and creates a full file path only for the limited duplicate and largest-file candidate sets. Storage explorer totals and exact duplicate verification remain unchanged.
+Version `0.19.0` accelerates the underlying NTFS catalogue loader. Luna reads the MFT stream in aligned 16 MiB blocks instead of 4 KiB device requests, repairs only bitmap-active records across multiple CPU workers, and reports separate MFT read, fixup, and record-processing times inside the inventory timing. A compatibility reader remains available automatically for volumes that reject wide reads.
 
 ### Included
 
@@ -14,7 +14,7 @@ Version `0.18.0` makes the NTFS inventory loop substantially leaner. Luna now ag
 - Automatic restoration of the newest locally saved scan after the window or app restarts, preferring the detailed cache and falling back to aggregate trend history when needed.
 - A dated snapshot warning and **Run a new scan** action on restored Scan results, Storage explorer, Duplicates, and Large files views.
 - Streaming scan progress from the Rust worker, with Windows-reported drive usage for whole-drive scans, measured bytes for folder scans, and a completed phase-by-phase timing breakdown.
-- Automatic MFT-backed inventory for full-drive NTFS scans, including record-number aggregation that avoids constructing a path for every ordinary file, an on-demand Windows UAC relaunch when needed, a safe Windows-directory fallback, and the completed scan method shown in Scan results.
+- Automatic MFT-backed inventory for full-drive NTFS scans, including aligned wide catalogue reads, parallel active-record fixup, record-number aggregation that avoids constructing a path for every ordinary file, an on-demand Windows UAC relaunch when needed, a safe Windows-directory fallback, and detailed MFT phase timings in Scan results.
 - OneDrive-safe whole-drive inventory using file names, sizes, and Files On-Demand attributes only; online-only placeholders count as 0 local bytes while always-kept and temporarily cached files are reported separately.
 - Top-level storage aggregation, selectable large-file ranking, and activity-age buckets.
 - Instant Storage explorer drill-down from map tiles and folder rows, including empty folders, direct files, breadcrumbs, and back navigation without a second disk scan.

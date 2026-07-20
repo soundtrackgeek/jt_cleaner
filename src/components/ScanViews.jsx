@@ -96,8 +96,11 @@ function scanMethodLabel(result) {
 function scanPhaseLabel(result) {
   const timings = result?.phaseTimings;
   if (!timings || !Object.values(timings).some((value) => value > 0)) return "";
+  const ntfsBreakdown = result?.scanMethod === "ntfs-mft" && timings.ntfsCatalogueReadMs > 0
+    ? ` (MFT read ${formatDuration(timings.ntfsCatalogueReadMs)}, fixup ${formatDuration(timings.ntfsRecordFixupMs)}, records ${formatDuration(timings.ntfsRecordParseMs)})`
+    : "";
   return [
-    `Inventory ${formatDuration(timings.inventoryMs)}`,
+    `Inventory ${formatDuration(timings.inventoryMs)}${ntfsBreakdown}`,
     `duplicates ${formatDuration(timings.duplicateMs)}`,
     `cleanup ${formatDuration(timings.cleanupMs)}`,
     `index ${formatDuration(timings.finalizeMs)}`,

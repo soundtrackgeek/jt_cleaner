@@ -1,6 +1,7 @@
 use ntfs_reader::{
     api::{
-        EPOCH_DIFFERENCE, NtfsAttributeType, NtfsFileNameHeader, NtfsFileNamespace, ROOT_RECORD,
+        EPOCH_DIFFERENCE, NtfsAttributeType, NtfsFileNameHeader, NtfsFileNamespace,
+        NtfsFileRecordHeader, ROOT_RECORD, SECTOR_SIZE,
     },
     attribute::NtfsAttribute,
     file::NtfsFile,
@@ -10,12 +11,19 @@ use ntfs_reader::{
 use std::{
     collections::HashMap,
     ffi::OsString,
+    fs::OpenOptions,
+    io::{self, Read, Seek, SeekFrom},
     mem::size_of,
-    os::windows::ffi::OsStringExt,
+    os::windows::{ffi::OsStringExt, fs::OpenOptionsExt},
     path::{Component, Path, PathBuf, Prefix},
-    time::{Duration, SystemTime},
+    thread,
+    time::{Duration, Instant, SystemTime},
 };
+use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_SEQUENTIAL_SCAN;
 
+const RAW_VOLUME_ALIGNMENT: u64 = 4_096;
+const MAX_DIRECT_READ_BYTES: usize = 16 * 1_024 * 1_024;
+const MAX_FIXUP_WORKERS: usize = 8;
 const MAX_PATH_DEPTH: usize = 1_024;
 const MAX_DIRECTORY_CAPACITY_HINT: usize = 2_000_000;
 pub(crate) const NTFS_ROOT_RECORD: u64 = ROOT_RECORD;
@@ -63,9 +71,118 @@ impl NtfsEntry<'_> {
     }
 }
 
+struct FastAlignedReader<R> {
+    inner: R,
+    alignment: u64,
+    position: u64,
+    buffer_position: u64,
+    buffer_size: usize,
+    buffer: Vec<u8>,
+}
+
+impl<R> FastAlignedReader<R>
+where
+    R: Read + Seek,
+{
+    fn new(inner: R, alignment: u64) -> io::Result<Self> {
+        if !alignment.is_power_of_two() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "raw-volume alignment must be a power of two",
+            ));
+        }
+        Ok(Self {
+            inner,
+            alignment,
+            position: 0,
+            buffer_position: 0,
+            buffer_size: 0,
+            buffer: Vec::with_capacity(alignment as usize),
+        })
+    }
+
+    fn round_down(&self, value: u64) -> u64 {
+        value / self.alignment * self.alignment
+    }
+
+    fn round_up(&self, value: u64) -> u64 {
+        if value.is_multiple_of(self.alignment) {
+            value
+        } else {
+            self.round_down(value) + self.alignment
+        }
+    }
+}
+
+impl<R> Read for FastAlignedReader<R>
+where
+    R: Read + Seek,
+{
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+
+        let aligned_position = self.round_down(self.position);
+        let offset = (self.position - aligned_position) as usize;
+        let alignment = self.alignment as usize;
+
+        if offset == 0 && output.len() >= alignment {
+            let direct_length = output.len().min(MAX_DIRECT_READ_BYTES) / alignment * alignment;
+            self.inner.seek(SeekFrom::Start(self.position))?;
+            self.inner.read_exact(&mut output[..direct_length])?;
+            self.position += direct_length as u64;
+            self.buffer_size = 0;
+            return Ok(direct_length);
+        }
+
+        let copy_length = output.len().min(alignment - offset);
+        let required = self.round_up((offset + copy_length) as u64) as usize;
+        if aligned_position != self.buffer_position || required > self.buffer_size {
+            self.inner.seek(SeekFrom::Start(aligned_position))?;
+            self.buffer.resize(required, 0);
+            self.inner.read_exact(&mut self.buffer)?;
+            self.buffer_position = aligned_position;
+            self.buffer_size = required;
+        }
+
+        output[..copy_length].copy_from_slice(&self.buffer[offset..offset + copy_length]);
+        self.position += copy_length as u64;
+        Ok(copy_length)
+    }
+}
+
+impl<R> Seek for FastAlignedReader<R>
+where
+    R: Read + Seek,
+{
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        let position = match position {
+            SeekFrom::Start(position) => Some(position),
+            SeekFrom::Current(offset) if offset >= 0 => self.position.checked_add(offset as u64),
+            SeekFrom::Current(offset) => self.position.checked_sub(offset.unsigned_abs()),
+            SeekFrom::End(_) => None,
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid raw-volume seek"))?;
+        self.position = position;
+        Ok(position)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NtfsScanSummary {
     pub(crate) unresolved_records: u64,
+    pub(crate) catalogue_read_ms: u128,
+    pub(crate) record_fixup_ms: u128,
+    pub(crate) record_parse_ms: u128,
+    pub(crate) used_compatibility_reader: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NtfsLoadTimings {
+    catalogue_read_ms: u128,
+    record_fixup_ms: u128,
+    used_compatibility_reader: bool,
 }
 
 /// Attempts a bulk `$MFT` inventory for a full Windows drive root.
@@ -87,8 +204,8 @@ where
     let volume = Volume::new(&device_path).map_err(|error| {
         format!("Windows did not make the NTFS master catalogue available ({error})")
     })?;
-    let mft = Mft::new(volume)
-        .map_err(|error| format!("Luna could not parse the NTFS master catalogue ({error})"))?;
+    let (mft, load_timings) = load_mft(volume)?;
+    let parse_started = Instant::now();
 
     let directory_capacity_hint = directory_capacity_hint(mft.max_record);
     let mut directory_paths = HashMap::with_capacity(directory_capacity_hint);
@@ -138,7 +255,177 @@ where
         });
     }
 
-    Ok(Some(NtfsScanSummary { unresolved_records }))
+    Ok(Some(NtfsScanSummary {
+        unresolved_records,
+        catalogue_read_ms: load_timings.catalogue_read_ms,
+        record_fixup_ms: load_timings.record_fixup_ms,
+        record_parse_ms: parse_started.elapsed().as_millis(),
+        used_compatibility_reader: load_timings.used_compatibility_reader,
+    }))
+}
+
+fn load_mft(volume: Volume) -> Result<(Mft, NtfsLoadTimings), String> {
+    match load_mft_fast(volume.clone()) {
+        Ok(result) => Ok(result),
+        Err(fast_error) => {
+            let started = Instant::now();
+            let mft = Mft::new(volume).map_err(|compatibility_error| {
+                format!(
+                    "Luna could not parse the NTFS master catalogue with either reader (wide-read error: {fast_error}; compatibility error: {compatibility_error})"
+                )
+            })?;
+            Ok((
+                mft,
+                NtfsLoadTimings {
+                    catalogue_read_ms: started.elapsed().as_millis(),
+                    record_fixup_ms: 0,
+                    used_compatibility_reader: true,
+                },
+            ))
+        }
+    }
+}
+
+fn load_mft_fast(volume: Volume) -> Result<(Mft, NtfsLoadTimings), String> {
+    let record_size = usize::try_from(volume.file_record_size)
+        .ok()
+        .filter(|size| *size >= size_of::<NtfsFileRecordHeader>())
+        .ok_or_else(|| "The NTFS catalogue reported an invalid file-record size.".to_string())?;
+
+    let read_started = Instant::now();
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+        .open(&volume.path)
+        .map_err(|error| format!("Luna could not open the raw NTFS volume ({error})"))?;
+    let mut reader = FastAlignedReader::new(file, RAW_VOLUME_ALIGNMENT)
+        .map_err(|error| format!("Luna could not prepare the raw NTFS reader ({error})"))?;
+    let mft_record = Mft::get_record_fs(&mut reader, volume.file_record_size, volume.mft_position)
+        .map_err(|error| format!("Luna could not read the NTFS catalogue record ({error})"))?;
+    let mut data = Mft::read_data_fs(&volume, &mut reader, &mft_record, NtfsAttributeType::Data)
+        .map_err(|error| format!("Luna could not bulk-read the NTFS catalogue ({error})"))?
+        .ok_or_else(|| "The NTFS catalogue did not contain its record stream.".to_string())?;
+    let bitmap = Mft::read_data_fs(&volume, &mut reader, &mft_record, NtfsAttributeType::Bitmap)
+        .map_err(|error| format!("Luna could not read the NTFS catalogue bitmap ({error})"))?
+        .ok_or_else(|| {
+            "The NTFS catalogue did not contain its active-record bitmap.".to_string()
+        })?;
+    let catalogue_read_ms = read_started.elapsed().as_millis();
+
+    let max_record = (data.len() / record_size) as u64;
+    let fixup_started = Instant::now();
+    fixup_active_records(&mut data, &bitmap, record_size)?;
+    let record_fixup_ms = fixup_started.elapsed().as_millis();
+
+    Ok((
+        Mft {
+            volume,
+            data,
+            bitmap,
+            max_record,
+        },
+        NtfsLoadTimings {
+            catalogue_read_ms,
+            record_fixup_ms,
+            used_compatibility_reader: false,
+        },
+    ))
+}
+
+fn fixup_active_records(data: &mut [u8], bitmap: &[u8], record_size: usize) -> Result<(), String> {
+    if record_size < size_of::<NtfsFileRecordHeader>() {
+        return Err("The NTFS catalogue reported an invalid file-record size.".to_string());
+    }
+    let record_count = data.len() / record_size;
+    if record_count == 0 {
+        return Ok(());
+    }
+
+    let workers = thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(MAX_FIXUP_WORKERS)
+        .min(record_count);
+    let records_per_worker = record_count.div_ceil(workers);
+    let bytes_per_worker = records_per_worker.saturating_mul(record_size);
+
+    let result = thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for (chunk_index, chunk) in data[..record_count * record_size]
+            .chunks_mut(bytes_per_worker)
+            .enumerate()
+        {
+            handles.push(scope.spawn(move || {
+                let first_record = chunk_index * records_per_worker;
+                for (offset, record) in chunk.chunks_exact_mut(record_size).enumerate() {
+                    let record_number = first_record + offset;
+                    if record_is_active(bitmap, record_number)
+                        && fixup_record(record_number as u64, record).is_err()
+                    {
+                        return Err(record_number as u64);
+                    }
+                }
+                Ok(())
+            }));
+        }
+
+        for handle in handles {
+            let worker_result = handle.join().map_err(|_| u64::MAX)?;
+            worker_result?;
+        }
+        Ok::<(), u64>(())
+    });
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(u64::MAX) => Err("An NTFS catalogue repair worker stopped unexpectedly.".to_string()),
+        Err(record_number) => Err(format!(
+            "The NTFS catalogue contained a corrupt active record ({record_number})."
+        )),
+    }
+}
+
+fn record_is_active(bitmap: &[u8], record_number: usize) -> bool {
+    bitmap
+        .get(record_number / 8)
+        .is_some_and(|byte| byte & (1 << (record_number % 8)) != 0)
+}
+
+fn fixup_record(_record_number: u64, data: &mut [u8]) -> Result<(), ()> {
+    if data.len() < size_of::<NtfsFileRecordHeader>() {
+        return Err(());
+    }
+    // SAFETY: the length check guarantees a complete header, and the record
+    // stream does not promise native alignment.
+    let header = unsafe {
+        data.as_ptr()
+            .cast::<NtfsFileRecordHeader>()
+            .read_unaligned()
+    };
+    let update_sequence_start = header.update_sequence_offset as usize;
+    if update_sequence_start + 2 > data.len() {
+        return Err(());
+    }
+    let replacement_start = update_sequence_start + 2;
+    let replacement_end = update_sequence_start
+        .saturating_add((header.update_sequence_length as usize).saturating_mul(2));
+    if replacement_end > data.len() {
+        return Err(());
+    }
+
+    let update_sequence = [data[update_sequence_start], data[update_sequence_start + 1]];
+    let mut sector_end = SECTOR_SIZE - 2;
+    for replacement in (replacement_start..replacement_end).step_by(2) {
+        if sector_end + 2 > data.len() {
+            break;
+        }
+        if data[sector_end..sector_end + 2] != update_sequence {
+            return Err(());
+        }
+        let replacement_bytes = [data[replacement], data[replacement + 1]];
+        data[sector_end..sector_end + 2].copy_from_slice(&replacement_bytes);
+        sector_end += SECTOR_SIZE;
+    }
+    Ok(())
 }
 
 fn directory_capacity_hint(record_count: u64) -> usize {
@@ -395,6 +682,41 @@ fn duration_from_ntfs_intervals(intervals: u64) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::Cursor,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct CountingReader {
+        cursor: Cursor<Vec<u8>>,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.cursor.read(output)
+        }
+    }
+
+    impl Seek for CountingReader {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.cursor.seek(position)
+        }
+    }
+
+    fn protected_record() -> Vec<u8> {
+        let mut record = vec![0_u8; 1_024];
+        record[4..6].copy_from_slice(&48_u16.to_le_bytes());
+        record[6..8].copy_from_slice(&3_u16.to_le_bytes());
+        record[48..54].copy_from_slice(&[0xAA, 0xBB, 1, 2, 3, 4]);
+        record[510..512].copy_from_slice(&[0xAA, 0xBB]);
+        record[1_022..1_024].copy_from_slice(&[0xAA, 0xBB]);
+        record
+    }
 
     #[test]
     fn raw_volume_path_is_only_created_for_a_drive_root() {
@@ -439,5 +761,63 @@ mod tests {
 
         assert_eq!(name.parent(), 42);
         assert_eq!(name.to_os_string(), OsString::from("Résumé.txt"));
+    }
+
+    #[test]
+    fn aligned_reader_uses_one_large_read_for_aligned_catalogue_data() {
+        let input: Vec<u8> = (0..131_072).map(|index| index as u8).collect();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counting_reader = CountingReader {
+            cursor: Cursor::new(input.clone()),
+            reads: Arc::clone(&reads),
+        };
+        let mut reader = FastAlignedReader::new(counting_reader, RAW_VOLUME_ALIGNMENT).unwrap();
+        let mut output = vec![0_u8; 65_536];
+
+        reader.read_exact(&mut output).unwrap();
+
+        assert_eq!(output, input[..output.len()]);
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn aligned_reader_preserves_unaligned_seek_and_tail_reads() {
+        let input: Vec<u8> = (0..32_768).map(|index| index as u8).collect();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counting_reader = CountingReader {
+            cursor: Cursor::new(input.clone()),
+            reads,
+        };
+        let mut reader = FastAlignedReader::new(counting_reader, RAW_VOLUME_ALIGNMENT).unwrap();
+        let mut output = vec![0_u8; 10_000];
+
+        reader.seek(SeekFrom::Start(123)).unwrap();
+        reader.read_exact(&mut output).unwrap();
+
+        assert_eq!(output, input[123..10_123]);
+    }
+
+    #[test]
+    fn parallel_fixup_repairs_only_bitmap_active_records() {
+        let inactive = protected_record();
+        let active = protected_record();
+        let mut data = [inactive, active].concat();
+
+        fixup_active_records(&mut data, &[0b0000_0010], 1_024).unwrap();
+
+        assert_eq!(&data[510..512], &[0xAA, 0xBB]);
+        assert_eq!(&data[1_022..1_024], &[0xAA, 0xBB]);
+        assert_eq!(&data[1_024 + 510..1_024 + 512], &[1, 2]);
+        assert_eq!(&data[1_024 + 1_022..1_024 + 1_024], &[3, 4]);
+    }
+
+    #[test]
+    fn parallel_fixup_rejects_a_corrupt_active_record() {
+        let mut record = protected_record();
+        record[510] = 0;
+
+        let error = fixup_active_records(&mut record, &[0b0000_0001], 1_024).unwrap_err();
+
+        assert!(error.contains("corrupt active record (0)"));
     }
 }

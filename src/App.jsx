@@ -181,7 +181,7 @@ function mapCleanupItem(item) {
 }
 
 const previewAiReport = {
-  model: "gpt-5.6-luna",
+  model: "gpt-6-luna",
   generatedAt: "2026-07-14T09:24:00+02:00",
   responseId: "preview",
   report: {
@@ -634,7 +634,7 @@ export function App() {
   const [scheduleStatus, setScheduleStatus] = useState({ enabled: false, frequency: "Weekly", runTime: "09:00", scanRoot: "", isScanning: false });
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [startupBusy, setStartupBusy] = useState(false);
-  const [aiStatus, setAiStatus] = useState({ configured: false, model: "gpt-5.6-luna", source: "none" });
+  const [aiStatus, setAiStatus] = useState({ configured: false, model: "gpt-6-luna", source: "none" });
   const [aiReport, setAiReport] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(5);
@@ -929,7 +929,7 @@ export function App() {
 
   async function saveApiKey(apiKey) {
     if (!isTauri) {
-      setAiStatus({ configured: true, model: "gpt-5.6-luna", source: "windowsCredentialManager" });
+      setAiStatus({ configured: true, model: "gpt-6-luna", source: "windowsCredentialManager" });
       setToast("Preview key validated and stored securely.");
       return;
     }
@@ -940,7 +940,7 @@ export function App() {
 
   async function removeApiKey() {
     if (!isTauri) {
-      const updated = { configured: false, model: "gpt-5.6-luna", source: "none" };
+      const updated = { configured: false, model: "gpt-6-luna", source: "none" };
       setAiStatus(updated);
       setToast("Preview saved key removed.");
       return updated;
@@ -1097,7 +1097,7 @@ export function App() {
   async function askAiAboutDuplicate(request) {
     if (!isTauri) {
       return {
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         generatedAt: new Date().toISOString(),
         responseId: "preview-duplicate-review",
         review: {
@@ -1158,7 +1158,7 @@ export function App() {
   async function askAiAboutLargeFile(file) {
     if (!isTauri) {
       return {
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         generatedAt: new Date().toISOString(),
         responseId: "preview-large-file-assessment",
         assessment: {
@@ -1309,7 +1309,7 @@ export function App() {
   const findingsIntro = aiReport
     ? aiReport.report.summary
     : scanResult
-      ? "I analyzed your local scan metadata. Ask Luna for a GPT-5.6 investigation when you want a deeper report."
+      ? "I analyzed your local scan metadata. Ask Luna for a GPT-6 investigation when you want a deeper report."
       : "I analyzed the preview scan results and here’s what stands out.";
   const ageChartEntries = scanResult
     ? [
@@ -1441,7 +1441,7 @@ export function App() {
         </div>
         <p className="findings-intro">{findingsIntro}</p>
         <button className="report-trigger" type="button" disabled={aiBusy} onClick={() => runAiInvestigation()}>
-          <Sparkle24Regular /> {aiBusy ? "Luna is investigating…" : aiReport ? "Refresh GPT-5.6 report" : "Investigate with GPT-5.6-Luna"}
+          <Sparkle24Regular /> {aiBusy ? "Luna is investigating…" : aiReport ? "Refresh GPT-6 report" : "Investigate with GPT-6-Luna"}
         </button>
         {aiReport?.report.answer && <p className="ai-answer">{aiReport.report.answer}</p>}
         <ol className="findings-list">

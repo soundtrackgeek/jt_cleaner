@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.20.0] - 2026-11-13
+
+### Changed
+
+- Upgrade the default AI model from GPT-5.6-Luna (`gpt-5.6-luna`) to GPT-6-Luna (`gpt-6-luna`) for investigation reports, follow-up questions, duplicate reviews, and Large Files opinions. `OPENAI_MODEL` still overrides the default.
+
 ## [0.19.0] - 2026-07-20
 
 ### Added

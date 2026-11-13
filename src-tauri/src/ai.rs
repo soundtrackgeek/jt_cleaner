@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::sync::Mutex;
 use zeroize::Zeroize;
 
-const DEFAULT_MODEL: &str = "gpt-5.6-luna";
+const DEFAULT_MODEL: &str = "gpt-6-luna";
 const CREDENTIAL_SERVICE: &str = "com.soundtrackgeek.lunaclean";
 const CREDENTIAL_USER: &str = "openai-api-key";
 const MAX_QUESTION_CHARS: usize = 1_200;

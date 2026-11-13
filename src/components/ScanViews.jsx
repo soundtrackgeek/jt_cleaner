@@ -468,7 +468,7 @@ export function SettingsView({ roots, selectedRoot, onRootChange, onScan, onChoo
       <section className="feature-surface credential-card">
         <div className="credential-heading">
           <span className={`credential-state ${aiStatus?.configured ? "is-ready" : ""}`}><LockClosed24Regular /></span>
-          <div><h2>OpenAI connection</h2><p>{credentialSource} · {aiStatus?.model || "gpt-5.6-luna"}</p></div>
+          <div><h2>OpenAI connection</h2><p>{credentialSource} · {aiStatus?.model || "gpt-6-luna"}</p></div>
         </div>
         <form onSubmit={submitApiKey}>
           <label htmlFor="openai-api-key">OpenAI API key</label>

@@ -4,7 +4,7 @@ Luna Clean is a Rust and Tauri 2 desktop app for understanding and carefully rec
 
 ## Current release
 
-Version `0.19.0` accelerates the underlying NTFS catalogue loader. Luna reads the MFT stream in aligned 16 MiB blocks instead of 4 KiB device requests, repairs only bitmap-active records across multiple CPU workers, and reports separate MFT read, fixup, and record-processing times inside the inventory timing. A compatibility reader remains available automatically for volumes that reject wide reads.
+Version `0.20.0` upgrades AI reports, follow-ups, and file opinions to GPT-6-Luna (`gpt-6-luna`). Version `0.19.0` accelerated the underlying NTFS catalogue loader. Luna reads the MFT stream in aligned 16 MiB blocks instead of 4 KiB device requests, repairs only bitmap-active records across multiple CPU workers, and reports separate MFT read, fixup, and record-processing times inside the inventory timing. A compatibility reader remains available automatically for volumes that reject wide reads.
 
 ### Included
 
@@ -36,7 +36,7 @@ Version `0.19.0` accelerates the underlying NTFS catalogue loader. Luna reads th
 - A single-scan guard shared by foreground and scheduled scans.
 - Close-to-tray behavior that destroys the WebView instead of keeping the full interface hidden in memory.
 - Persistent main-window position, size, and maximized state across tray reopen, app restart, and update relaunch.
-- GPT-5.6-Luna investigation reports, follow-up questions, and explicit per-file opinions using minimized metadata.
+- GPT-6-Luna investigation reports, follow-up questions, and explicit per-file opinions using minimized metadata.
 - Strict structured AI responses with evidence, confidence, risk, and preservation-first next actions.
 - Masked in-app OpenAI key setup with Rust-side validation and Windows Credential Manager storage.
 - Development fallback through `OPENAI_API_KEY`, with the saved Windows credential taking priority.
@@ -64,7 +64,7 @@ npm run tauri dev
 
 For normal use, open **Settings**, enter an OpenAI API key, and choose **Save key**. Luna validates access to the configured model before saving the key in Windows Credential Manager. The masked field is cleared immediately, and the key is never placed in browser storage or Luna's JSON settings.
 
-For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignored by Git and read only by the Rust backend. A key saved in Windows Credential Manager takes priority over this environment fallback. Set `OPENAI_MODEL` only when testing a compatible alternate model; the default is `gpt-5.6-luna`.
+For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignored by Git and read only by the Rust backend. A key saved in Windows Credential Manager takes priority over this environment fallback. Set `OPENAI_MODEL` only when testing a compatible alternate model; the default is `gpt-6-luna`.
 
 ## Using the scanner
 
@@ -79,7 +79,7 @@ For development, you can instead set `OPENAI_API_KEY` in `.env`. `.env` is ignor
 8. In **Duplicates**, select only the exact copies you want to remove. Luna keeps at least one verified copy, re-hashes every selected file before deletion, and lets you ask AI about any copy's location and risk.
 9. In **Large files**, select files for permanent deletion or choose **Ask AI** for a conservative verdict and safer storage suggestions based on the selected file's minimized metadata.
 10. Open **Trends** after the scan to compare the current snapshot with earlier scans. Capturing from Trends shows progress in place, and a second scan on the same day refreshes that day instead of adding noise. Choose **Review snapshots** to inspect any capture or delete one after confirmation.
-11. Choose **Investigate with GPT-5.6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
+11. Choose **Investigate with GPT-6-Luna** for an aggregate evidence report, or ask a focused follow-up. AI requests are explicit and do not include file contents.
 
 ## Tray and scheduled snapshots
 
